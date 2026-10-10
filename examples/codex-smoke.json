@@ -1,0 +1,32 @@
+{
+  "skill": "../../agent-skills/investigate-bug",
+  "suite": "../fixtures/bug-investigation-v1.json",
+  "targets": [
+    {
+      "id": "codex-default",
+      "agent": "codex",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "version": "0.160.0",
+      "backend": "codex-native",
+      "image": null,
+      "network": "none",
+      "auth_env": []
+    }
+  ],
+  "budget": {
+    "max_task_runs": 4,
+    "max_candidates": 1,
+    "max_generations": 0,
+    "wall_seconds": 3600,
+    "task_seconds": 240,
+    "max_output_bytes": 2000000
+  },
+  "gates": {
+    "repeats": 3,
+    "min_holdout_groups": 5,
+    "min_gain": 0.05,
+    "max_time_growth": 0.2
+  },
+  "generator": null
+}

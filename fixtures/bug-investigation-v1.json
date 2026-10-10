@@ -1,0 +1,579 @@
+{
+  "version": 1,
+  "id": "bug-investigation-v1",
+  "reviewed": true,
+  "cases": [
+    {
+      "id": "zero-default",
+      "group": "zero-default",
+      "split": "train",
+      "request": "Investigate only; do not edit app.py or reproduce.py. The expected result from reproduce.py is 0. Run exactly `python3 reproduce.py`. Determine the observed result and root cause. Write report.json with fields file (source filename), line (integer root-cause line), observed (JSON value), expected (JSON value), explanation (a brief explanation).",
+      "files": {
+        "app.py": "def limit(value):\n    return value or 10\n",
+        "reproduce.py": "from app import limit\nprint(limit(0))\n"
+      },
+      "checks": [
+        {
+          "kind": "unchanged",
+          "path": "app.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "unchanged",
+          "path": "reproduce.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "command_observed",
+          "path": "report.json",
+          "key": "",
+          "expected": "python3 reproduce.py",
+          "mandatory": true
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "file",
+          "expected": "app.py",
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "line",
+          "expected": 2,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "observed",
+          "expected": 10,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "expected",
+          "expected": 0,
+          "mandatory": false
+        }
+      ],
+      "source": "synthetic-reviewed-in-repository"
+    },
+    {
+      "id": "inclusive-range",
+      "group": "inclusive-range",
+      "split": "train",
+      "request": "Investigate only; do not edit app.py or reproduce.py. The expected result from reproduce.py is 6. Run exactly `python3 reproduce.py`. Determine the observed result and root cause. Write report.json with fields file (source filename), line (integer root-cause line), observed (JSON value), expected (JSON value), explanation (a brief explanation).",
+      "files": {
+        "app.py": "def total(n):\n    return sum(range(1, n))\n",
+        "reproduce.py": "from app import total\nprint(total(3))\n"
+      },
+      "checks": [
+        {
+          "kind": "unchanged",
+          "path": "app.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "unchanged",
+          "path": "reproduce.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "command_observed",
+          "path": "report.json",
+          "key": "",
+          "expected": "python3 reproduce.py",
+          "mandatory": true
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "file",
+          "expected": "app.py",
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "line",
+          "expected": 2,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "observed",
+          "expected": 3,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "expected",
+          "expected": 6,
+          "mandatory": false
+        }
+      ],
+      "source": "synthetic-reviewed-in-repository"
+    },
+    {
+      "id": "mutable-default",
+      "group": "mutable-default",
+      "split": "validation",
+      "request": "Investigate only; do not edit app.py or reproduce.py. The expected result from reproduce.py is [2]. Run exactly `python3 reproduce.py`. Determine the observed result and root cause. Write report.json with fields file (source filename), line (integer root-cause line), observed (JSON value), expected (JSON value), explanation (a brief explanation).",
+      "files": {
+        "app.py": "def add(value, values=[]):\n    values.append(value)\n    return list(values)\n",
+        "reproduce.py": "from app import add\nadd(1)\nprint(add(2))\n"
+      },
+      "checks": [
+        {
+          "kind": "unchanged",
+          "path": "app.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "unchanged",
+          "path": "reproduce.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "command_observed",
+          "path": "report.json",
+          "key": "",
+          "expected": "python3 reproduce.py",
+          "mandatory": true
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "file",
+          "expected": "app.py",
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "line",
+          "expected": 1,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "observed",
+          "expected": [
+            1,
+            2
+          ],
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "expected",
+          "expected": [
+            2
+          ],
+          "mandatory": false
+        }
+      ],
+      "source": "synthetic-reviewed-in-repository"
+    },
+    {
+      "id": "inplace-sort",
+      "group": "inplace-sort",
+      "split": "validation",
+      "request": "Investigate only; do not edit app.py or reproduce.py. The expected result from reproduce.py is [1, 2]. Run exactly `python3 reproduce.py`. Determine the observed result and root cause. Write report.json with fields file (source filename), line (integer root-cause line), observed (JSON value), expected (JSON value), explanation (a brief explanation).",
+      "files": {
+        "app.py": "def ordered(values):\n    return values.sort()\n",
+        "reproduce.py": "from app import ordered\nprint(ordered([2,1]))\n"
+      },
+      "checks": [
+        {
+          "kind": "unchanged",
+          "path": "app.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "unchanged",
+          "path": "reproduce.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "command_observed",
+          "path": "report.json",
+          "key": "",
+          "expected": "python3 reproduce.py",
+          "mandatory": true
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "file",
+          "expected": "app.py",
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "line",
+          "expected": 2,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "observed",
+          "expected": null,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "expected",
+          "expected": [
+            1,
+            2
+          ],
+          "mandatory": false
+        }
+      ],
+      "source": "synthetic-reviewed-in-repository"
+    },
+    {
+      "id": "string-sort",
+      "group": "string-sort",
+      "split": "holdout",
+      "request": "Investigate only; do not edit app.py or reproduce.py. The expected result from reproduce.py is ['2', '10']. Run exactly `python3 reproduce.py`. Determine the observed result and root cause. Write report.json with fields file (source filename), line (integer root-cause line), observed (JSON value), expected (JSON value), explanation (a brief explanation).",
+      "files": {
+        "app.py": "def ordered(values):\n    return sorted(values)\n",
+        "reproduce.py": "from app import ordered\nprint(ordered([\"2\",\"10\"]))\n"
+      },
+      "checks": [
+        {
+          "kind": "unchanged",
+          "path": "app.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "unchanged",
+          "path": "reproduce.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "command_observed",
+          "path": "report.json",
+          "key": "",
+          "expected": "python3 reproduce.py",
+          "mandatory": true
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "file",
+          "expected": "app.py",
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "line",
+          "expected": 2,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "observed",
+          "expected": [
+            "10",
+            "2"
+          ],
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "expected",
+          "expected": [
+            "2",
+            "10"
+          ],
+          "mandatory": false
+        }
+      ],
+      "source": "synthetic-reviewed-in-repository"
+    },
+    {
+      "id": "integer-average",
+      "group": "integer-average",
+      "split": "holdout",
+      "request": "Investigate only; do not edit app.py or reproduce.py. The expected result from reproduce.py is 1.5. Run exactly `python3 reproduce.py`. Determine the observed result and root cause. Write report.json with fields file (source filename), line (integer root-cause line), observed (JSON value), expected (JSON value), explanation (a brief explanation).",
+      "files": {
+        "app.py": "def average(values):\n    return sum(values) // len(values)\n",
+        "reproduce.py": "from app import average\nprint(average([1,2]))\n"
+      },
+      "checks": [
+        {
+          "kind": "unchanged",
+          "path": "app.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "unchanged",
+          "path": "reproduce.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "command_observed",
+          "path": "report.json",
+          "key": "",
+          "expected": "python3 reproduce.py",
+          "mandatory": true
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "file",
+          "expected": "app.py",
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "line",
+          "expected": 2,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "observed",
+          "expected": 1,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "expected",
+          "expected": 1.5,
+          "mandatory": false
+        }
+      ],
+      "source": "synthetic-reviewed-in-repository"
+    },
+    {
+      "id": "casefold-match",
+      "group": "casefold-match",
+      "split": "holdout",
+      "request": "Investigate only; do not edit app.py or reproduce.py. The expected result from reproduce.py is True. Run exactly `python3 reproduce.py`. Determine the observed result and root cause. Write report.json with fields file (source filename), line (integer root-cause line), observed (JSON value), expected (JSON value), explanation (a brief explanation).",
+      "files": {
+        "app.py": "def matches(a,b):\n    return a == b\n",
+        "reproduce.py": "from app import matches\nprint(matches(\"ABC\",\"abc\"))\n"
+      },
+      "checks": [
+        {
+          "kind": "unchanged",
+          "path": "app.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "unchanged",
+          "path": "reproduce.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "command_observed",
+          "path": "report.json",
+          "key": "",
+          "expected": "python3 reproduce.py",
+          "mandatory": true
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "file",
+          "expected": "app.py",
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "line",
+          "expected": 2,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "observed",
+          "expected": false,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "expected",
+          "expected": true,
+          "mandatory": false
+        }
+      ],
+      "source": "synthetic-reviewed-in-repository"
+    },
+    {
+      "id": "discount-order",
+      "group": "discount-order",
+      "split": "holdout",
+      "request": "Investigate only; do not edit app.py or reproduce.py. The expected result from reproduce.py is 80.0. Run exactly `python3 reproduce.py`. Determine the observed result and root cause. Write report.json with fields file (source filename), line (integer root-cause line), observed (JSON value), expected (JSON value), explanation (a brief explanation).",
+      "files": {
+        "app.py": "def price(base, discount):\n    return base - discount / 100\n",
+        "reproduce.py": "from app import price\nprint(price(100,20))\n"
+      },
+      "checks": [
+        {
+          "kind": "unchanged",
+          "path": "app.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "unchanged",
+          "path": "reproduce.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "command_observed",
+          "path": "report.json",
+          "key": "",
+          "expected": "python3 reproduce.py",
+          "mandatory": true
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "file",
+          "expected": "app.py",
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "line",
+          "expected": 2,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "observed",
+          "expected": 99.8,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "expected",
+          "expected": 80.0,
+          "mandatory": false
+        }
+      ],
+      "source": "synthetic-reviewed-in-repository"
+    },
+    {
+      "id": "unit-conversion",
+      "group": "unit-conversion",
+      "split": "holdout",
+      "request": "Investigate only; do not edit app.py or reproduce.py. The expected result from reproduce.py is 120. Run exactly `python3 reproduce.py`. Determine the observed result and root cause. Write report.json with fields file (source filename), line (integer root-cause line), observed (JSON value), expected (JSON value), explanation (a brief explanation).",
+      "files": {
+        "app.py": "def seconds(minutes):\n    return minutes * 100\n",
+        "reproduce.py": "from app import seconds\nprint(seconds(2))\n"
+      },
+      "checks": [
+        {
+          "kind": "unchanged",
+          "path": "app.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "unchanged",
+          "path": "reproduce.py",
+          "key": "",
+          "expected": null,
+          "mandatory": true
+        },
+        {
+          "kind": "command_observed",
+          "path": "report.json",
+          "key": "",
+          "expected": "python3 reproduce.py",
+          "mandatory": true
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "file",
+          "expected": "app.py",
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "line",
+          "expected": 2,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "observed",
+          "expected": 200,
+          "mandatory": false
+        },
+        {
+          "kind": "json_equals",
+          "path": "report.json",
+          "key": "expected",
+          "expected": 120,
+          "mandatory": false
+        }
+      ],
+      "source": "synthetic-reviewed-in-repository"
+    }
+  ]
+}

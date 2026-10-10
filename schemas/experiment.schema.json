@@ -1,0 +1,206 @@
+{
+  "$defs": {
+    "Budget": {
+      "additionalProperties": false,
+      "properties": {
+        "max_task_runs": {
+          "default": 200,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Max Task Runs",
+          "type": "integer"
+        },
+        "max_candidates": {
+          "default": 4,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Candidates",
+          "type": "integer"
+        },
+        "max_generations": {
+          "default": 4,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Max Generations",
+          "type": "integer"
+        },
+        "wall_seconds": {
+          "default": 3600,
+          "minimum": 1,
+          "title": "Wall Seconds",
+          "type": "integer"
+        },
+        "task_seconds": {
+          "default": 180,
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Task Seconds",
+          "type": "integer"
+        },
+        "max_output_bytes": {
+          "default": 2000000,
+          "maximum": 20000000,
+          "minimum": 1024,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        }
+      },
+      "title": "Budget",
+      "type": "object"
+    },
+    "Gates": {
+      "additionalProperties": false,
+      "properties": {
+        "repeats": {
+          "default": 3,
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Repeats",
+          "type": "integer"
+        },
+        "min_holdout_groups": {
+          "default": 5,
+          "minimum": 2,
+          "title": "Min Holdout Groups",
+          "type": "integer"
+        },
+        "min_gain": {
+          "default": 0.05,
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Min Gain",
+          "type": "number"
+        },
+        "max_time_growth": {
+          "default": 0.2,
+          "minimum": 0,
+          "title": "Max Time Growth",
+          "type": "number"
+        }
+      },
+      "title": "Gates",
+      "type": "object"
+    },
+    "Profile": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "agent": {
+          "enum": [
+            "claude",
+            "codex",
+            "opencode",
+            "pi"
+          ],
+          "title": "Agent",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "effort": {
+          "minLength": 1,
+          "title": "Effort",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        },
+        "backend": {
+          "enum": [
+            "codex-native",
+            "docker",
+            "simulation"
+          ],
+          "title": "Backend",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
+        "network": {
+          "default": "none",
+          "title": "Network",
+          "type": "string"
+        },
+        "auth_env": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Auth Env",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "agent",
+        "model",
+        "effort",
+        "version",
+        "backend"
+      ],
+      "title": "Profile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "skill": {
+      "title": "Skill",
+      "type": "string"
+    },
+    "suite": {
+      "title": "Suite",
+      "type": "string"
+    },
+    "targets": {
+      "items": {
+        "$ref": "#/$defs/Profile"
+      },
+      "minItems": 1,
+      "title": "Targets",
+      "type": "array"
+    },
+    "budget": {
+      "$ref": "#/$defs/Budget"
+    },
+    "gates": {
+      "$ref": "#/$defs/Gates"
+    },
+    "generator": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Profile"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "skill",
+    "suite",
+    "targets"
+  ],
+  "title": "Experiment",
+  "type": "object"
+}

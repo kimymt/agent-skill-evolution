@@ -1,0 +1,38 @@
+# Python environments and generated files
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+# Evaluation and observer records
+.evolution*/
+runs/
+
+# Environment files and local backups
+.env
+.env.*
+*.env
+*.bak
+*.orig
+*.before-agent-evolution-*
+.DS_Store
+Thumbs.db
+
+# Local evidence and environment-specific samples excluded from this distribution
+/manifest.json
+/applied-manifest.json
+/applied-diff.patch
+/validation/
+/VERIFICATION.md
+/OBSERVER_VERIFICATION.md
+/DESIGN_PLAN.md
+/examples/codex-local-check.json
+/fixtures/codex-local-smoke.json
