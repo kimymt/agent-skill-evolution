@@ -94,9 +94,77 @@ def test_promote_requires_confirmation_and_displays_target(experiment, monkeypat
     assert "promotion" in payload
 
 
-def test_approve_and_promote_help_list_yes_flag():
+def _invoke_rollback(store, ident, *, yes=False, input=None):
+    args = ["--state", str(store.root), "rollback", "--promotion", ident]
+    if yes:
+        args.append("--yes")
+    return CliRunner().invoke(app, args, input=input)
+
+
+def _promoted(experiment, monkeypatch):
+    store, r, sha, report_sha = _eligible(experiment)
+    monkeypatch.setattr("agent_evolution.cli._is_interactive", lambda: False)
+    approved = _invoke(store, "approve", r.id, sha, report_sha, yes=True)
+    assert approved.exit_code == 0, approved.output
+    applied = _invoke(store, "promote", r.id, sha, report_sha, yes=True)
+    assert applied.exit_code == 0, applied.output
+    ident = json.loads(applied.output[applied.output.index("{"):])["promotion"]
+    target = Path(r.config.skill) / "SKILL.md"
+    return store, r, sha, report_sha, ident, target
+
+
+def test_noninteractive_rollback_without_yes_leaves_skill_unchanged(experiment, monkeypatch):
+    store, r, sha, report_sha, ident, target = _promoted(experiment, monkeypatch)
+    promoted_text = target.read_text()
+    assert "SIMULATION_PASS" in promoted_text
+    result = _invoke_rollback(store, ident)
+    assert result.exit_code != 0
+    assert "requires --yes" in result.output
+    assert "action: rollback" in result.output
+    assert ident in result.output and r.id in result.output
+    assert str(r.config.skill) in result.output
+    assert target.read_text() == promoted_text
+    assert store.get(r.id)["status"] == "promoted"
+
+
+def test_noninteractive_rollback_with_yes_restores_skill(experiment, monkeypatch):
+    store, r, sha, report_sha, ident, target = _promoted(experiment, monkeypatch)
+    result = _invoke_rollback(store, ident, yes=True)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output[result.output.index("{"):])
+    assert payload["rolled_back"] == ident
+    assert "SIMULATION_PASS" not in target.read_text()
+    assert store.get(r.id)["status"] == "rolled_back"
+
+
+def test_interactive_rollback_yes_and_no(experiment, monkeypatch):
+    store, r, sha, report_sha, ident, target = _promoted(experiment, monkeypatch)
+    promoted_text = target.read_text()
+    monkeypatch.setattr("agent_evolution.cli._is_interactive", lambda: True)
+    declined = _invoke_rollback(store, ident, input="\n")
+    assert declined.exit_code != 0
+    assert target.read_text() == promoted_text
+    refused = _invoke_rollback(store, ident, input="n\n")
+    assert refused.exit_code != 0
+    assert target.read_text() == promoted_text
+    assert "Confirmation declined" in declined.output + refused.output
+    accepted = _invoke_rollback(store, ident, input="y\n")
+    assert accepted.exit_code == 0, accepted.output
+    assert "SIMULATION_PASS" not in target.read_text()
+
+
+def test_piped_yes_without_flag_does_not_rollback(experiment, monkeypatch):
+    store, r, sha, report_sha, ident, target = _promoted(experiment, monkeypatch)
+    promoted_text = target.read_text()
+    monkeypatch.setattr("agent_evolution.cli._is_interactive", lambda: False)
+    result = _invoke_rollback(store, ident, input="y\n")
+    assert result.exit_code != 0
+    assert target.read_text() == promoted_text
+
+
+def test_approve_promote_and_rollback_help_list_yes_flag():
     runner = CliRunner()
-    for command in ("approve", "promote"):
+    for command in ("approve", "promote", "rollback"):
         result = runner.invoke(app, [command, "--help"])
         assert result.exit_code == 0, result.output
         assert "--yes" in result.output

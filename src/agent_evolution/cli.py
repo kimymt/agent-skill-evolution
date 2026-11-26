@@ -67,8 +67,11 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _confirm_adoption(*, action: str, run: str, candidate_sha: str, report_sha: str, target: str, yes: bool):
+def _confirm_adoption(*, action: str, run: str, candidate_sha: str, report_sha: str, target: str, yes: bool,
+                      promotion: str | None = None):
     typer.echo(f"action: {action}")
+    if promotion is not None:
+        typer.echo(f"promotion: {promotion}")
     typer.echo(f"run: {run}")
     typer.echo(f"candidate: {candidate_sha}")
     typer.echo(f"report: {report_sha}")
@@ -227,9 +230,17 @@ def promote(run: str = typer.Option(...), candidate_sha: str = typer.Option(...)
 
 
 @app.command()
-def rollback(promotion: str = typer.Option(...)):
+def rollback(promotion: str = typer.Option(...),
+             yes: bool = typer.Option(False, "--yes", help="Confirm without a prompt")):
     from .promotion import rollback as undo
     s = store()
+    row = s.db.execute("SELECT data FROM promotions WHERE id=?", (promotion,)).fetchone()
+    if not row:
+        raise EvolutionError("Unknown promotion ID")
+    entry = json.loads(row[0])
+    _confirm_adoption(action="rollback", run=str(entry["run"]), candidate_sha=str(entry["after"]["hash"]),
+                      report_sha=str(entry["report"]), target=str(entry["target"]), yes=yes,
+                      promotion=promotion)
     with s.files.lock("rollback.lock"):
         undo(s, promotion)
     show({"rolled_back": promotion})
