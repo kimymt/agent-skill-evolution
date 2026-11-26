@@ -98,12 +98,18 @@ def codex_permissions(work: Path) -> list[str]:
     return [arg for k, v in values.items() for arg in ("-c", f"{k}={v}")]
 
 
+def _model_args(flag: str, profile: Profile) -> list[str]:
+    if profile.model is None:
+        return []
+    return [flag, profile.model]
+
+
 def command(profile: Profile, work: Path, prompt: str) -> list[str]:
     if profile.agent not in AGENTS:
         raise EvolutionError("Unknown agent adapter")
     if profile.agent == "codex":
         args = ["codex", "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-                "--skip-git-repo-check", "--strict-config", "-m", profile.model,
+                "--skip-git-repo-check", "--strict-config", *_model_args("-m", profile),
                 "-c", "model_reasoning_effort=" + json.dumps(profile.effort)]
         if profile.backend == "codex-native":
             args += codex_permissions(work)
@@ -111,14 +117,14 @@ def command(profile: Profile, work: Path, prompt: str) -> list[str]:
             args += ["--sandbox", "workspace-write", "-c", 'approval_policy="never"']
         return args + [prompt]
     if profile.agent == "claude":
-        return ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", profile.model,
+        return ["claude", "-p", "--output-format", "stream-json", "--verbose", *_model_args("--model", profile),
                 "--effort", profile.effort, "--setting-sources", "project", "--strict-mcp-config",
                 "--mcp-config", '{"mcpServers":{}}', "--allowedTools", "Read,Write,Edit,Bash", prompt]
     if profile.agent == "opencode":
-        return ["opencode", "run", "--format", "json", "--model", profile.model, "--variant", profile.effort, prompt]
+        return ["opencode", "run", "--format", "json", *_model_args("--model", profile), "--variant", profile.effort, prompt]
     if profile.agent == "pi":
         return ["pi", "--mode", "json", "-p", "--no-session", "--no-extensions", "--no-prompt-templates",
-                "--no-context-files", "--model", profile.model, "--thinking", profile.effort, prompt]
+                "--no-context-files", *_model_args("--model", profile), "--thinking", profile.effort, prompt]
     raise EvolutionError("Unknown agent adapter")
 
 

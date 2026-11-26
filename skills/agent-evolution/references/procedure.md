@@ -22,7 +22,7 @@
 
 `start --config PATH` と `doctor --config PATH` が読む JSON です。公式スキーマは配布リポジトリの `schemas/experiment.schema.json`、実例は `examples/codex-smoke.json` です。`skill` と `suite` は、設定ファイルがあるディレクトリからの相対パス、または絶対パスで書きます。必須項目は `skill`、`suite`、`targets` です。追加のキーは受け付けません。
 
-`targets` と `generator` の各プロファイルでは、`id`、`agent`、`model`、`effort`、`backend` が必須です。`agent` は `claude`、`codex`、`opencode`、`pi`。`backend` は `codex-native`、`docker`、`simulation`。`codex-native` は `agent` が `codex` のときだけ使えます。`version` は省略するか `"auto"` にすると実環境から取得し、明示した場合は完全一致を要求します。`network` の既定は `"none"`。`auth_env` に書けるのは `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`OPENROUTER_API_KEY` だけです。値ではなく変数名だけを書き、秘密情報は設定ファイルに含めません。
+`targets` と `generator` の各プロファイルでは、`id`、`agent`、`effort`、`backend` が必須です。`model` は省略でき、省略時は各ハーネスの既定モデルを使います。`agent` は `claude`、`codex`、`opencode`、`pi`。`backend` は `codex-native`、`docker`、`simulation`。`codex-native` は `agent` が `codex` のときだけ使えます。`version` は省略するか `"auto"` にすると実環境から取得し、明示した場合は完全一致を要求します。`network` の既定は `"none"`。`auth_env` に書けるのは `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`OPENROUTER_API_KEY` だけです。値ではなく変数名だけを書き、秘密情報は設定ファイルに含めません。
 
 `docker` は製品別の実効設定を読む診断が未実装のため、この配布では実評価を開始しません。`simulation` の結果は性能改善の証拠にも採用条件にも使いません。
 
@@ -36,7 +36,6 @@
     {
       "id": "codex-default",
       "agent": "codex",
-      "model": "MODEL_NAME",
       "effort": "high",
       "version": "auto",
       "backend": "codex-native",

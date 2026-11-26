@@ -5,7 +5,6 @@
     {
       "id": "codex-default",
       "agent": "codex",
-      "model": "gpt-6-astra",
       "effort": "high",
       "version": "auto",
       "backend": "codex-native",
