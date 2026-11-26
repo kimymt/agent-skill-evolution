@@ -72,7 +72,7 @@ class Suite(Strict):
 class Profile(Strict):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
     agent: AgentName
-    model: str = Field(min_length=1)
+    model: str | None = Field(default=None, min_length=1)
     effort: str = Field(min_length=1)
     version: str | None = Field(default=None, min_length=1)
     backend: Literal["codex-native", "docker", "simulation"]

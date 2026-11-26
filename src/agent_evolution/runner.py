@@ -182,7 +182,10 @@ class Runner:
         info = {"key": key, "candidate": sha, "case": case.id, "group": case.group,
                 "split": case.split, "profile": profile.id, "repeat": repeat,
                 "evidence": "simulation" if profile.backend == "simulation" else "live",
-                "profile_hash": digest(profile.model_dump_json()), "usage": None, "cost": None,
+                "profile_hash": digest(profile.model_dump_json()),
+                # requested_model is what the profile asked for (null: harness default);
+                # resolved_model is what the harness reported using (null: not reported).
+                "requested_model": profile.model, "resolved_model": None, "usage": None, "cost": None,
                 "cost_status": "unknown", "status": "infrastructure_error", "score": 0,
                 "passed": False, "hard_pass": False, "skill_read": False, "seconds": 0}
         # Place the workspace outside the store. Only this directory becomes a writable root.
@@ -262,7 +265,8 @@ class Runner:
                     self.store.files.write_bytes(f"{self.relative_path}/{key}.stderr.txt", stderr)
                 self.store.files.write_bytes(f"{self.relative_path}/{key}.trace.json", canonical(trace))
                 self.store.files.write_bytes(f"{self.relative_path}/{key}.outputs.json", canonical(outputs))
-                info.update(scored, skill_read=True, usage=trace.get("usage"), cost=trace.get("cost"),
+                info.update(scored, skill_read=True, resolved_model=trace.get("resolved_model"),
+                            usage=trace.get("usage"), cost=trace.get("cost"),
                             cost_status="reported" if trace.get("cost") is not None else "unknown")
             except EvolutionError as e:
                 info["error"] = str(e)
