@@ -22,8 +22,13 @@
 | --- | --- | --- |
 | Codex | UserPromptSubmit、PostToolUse、Stop、Interrupt | Stopが同じエージェントに確認の質問を要求する |
 | Claude Code | UserPromptSubmit、PostToolUse、PostToolUseFailure、Stop | Stopが同じエージェントに確認の質問を要求する |
+| Grok CLI | UserPromptSubmit、PostToolUse、PostToolUseFailure、Stop。`StopCancelled` は中断として扱う | Stopが `{"decision":"block","reason":"..."}` を返し、同じターンで確認の質問を続ける |
 | Pi | before_agent_start、tool_result、agent_settled | 作業が完全に終了してからUI確認。承認時に準備の依頼を送る |
 | OpenCode | chat.message、message.part.updated、session.idle | TUI通知。`evolution approve 通知ID` / `evolution decline 通知ID` と返信 |
+
+Codex・Claude Code・Grok CLIは、同じ配布版 `scripts/observe.py` を `--agent` だけ変えて呼び出す。観測の本体は共通で、製品差は登録先と引数に閉じる。Pi・OpenCodeは各製品のJS入口から、同じ `observe.py` に接続する。
+
+Grok CLIは `~/.claude/settings.json` のフックも読み込む。同じセッションでClaude用とGrok用の入口が両方動くと二重に記録されるため、`GROK_SESSION_ID` または `GROK_HOOK_EVENT` がある実行では、`--agent grok` 以外の入口は記録せず終了する。Claude Code側の登録は残す。
 
 Codex・Claude Codeでは失敗の観測だけがあり終了判定が未記録の場合、1回だけ結果の確認・記録をエージェントに要求する。失敗の最終判定が付くまで人への起動確認は行わない。起動確認を提示する継続要求も1回まで。
 
@@ -44,7 +49,7 @@ python3 -I -S -B scripts/install_observer.py --runtime /absolute/path/to/candida
 
 `observer-runtime.json` はPython実体と正本スキルの絶対パスを指定する。Pythonは `-I -S -B` で起動し、設定欠落・不正時に開発コピーへ戻らない。SKILL.mdの正本と既存リンクはそのまま使う。Piの入力Schemaは配布物内にあり、外部パッケージを動的にimportしない。
 
-インストーラーは既存設定を保持し、変更前後のハッシュ・対象定義・適用状況を `~/.local/share/agent-evolution/observer/changes/日時.json` に記録する。他の設定全体は複製しない。既知の管理対象コマンドと入口だけを更新し、独自に変更された入口や設定競合は上書きしない。途中で失敗した場合は記録を確認し、旧開発コピーへ自動復帰しない。再実行は同じ設定を重複登録しない。指定製品だけなら `--agents codex,claude` を使う。
+インストーラーは既存設定を保持し、変更前後のハッシュ・対象定義・適用状況を `~/.local/share/agent-evolution/observer/changes/日時.json` に記録する。他の設定全体は複製しない。既知の管理対象コマンドと入口だけを更新し、独自に変更された入口や設定競合は上書きしない。途中で失敗した場合は記録を確認し、旧開発コピーへ自動復帰しない。再実行は同じ設定を重複登録しない。指定製品だけなら `--agents codex,claude,grok` のように使う。未指定の既定は `codex,claude,grok`。
 
 保護の前提は、通常ツールの書込み許可範囲に配布先とPython実体が含まれないこと。同一ユーザーの制限なし実行、管理者、ホーム全体を許可したセッションからの改変は防がない。配布先の権限0700/0600だけを同一ユーザーに対する隔離とは扱わない。
 
@@ -56,7 +61,7 @@ python3 -I -S -B scripts/install_observer.py --runtime /absolute/path/to/candida
 
 **Codexは新しいセッションで `/hooks` を開き、追加されたobserve.pyの定義を信頼する操作が必要。** 信頼情報や承認ポリシーはインストーラーで書き換えない。Grok CLIでは、ホーム以外の作業フォルダで `/hooks` や `/hooks-trust` が必要になることがある。Claude Code・Pi・OpenCodeも次回起動で読み込ませる。
 
-解除する場合は監視停止への承認を得た上で、Codex・Claude Codeの該当配布版 `scripts/observe.py` を実行する管理対象ハンドラーだけを削除する。Pi・OpenCodeは上記のagent-evolution.jsだけを削除する。既存のverify-changesなどのフックを残す。古いバックアップの丸ごと復元は、その後の設定変更を消すため通常の解除には使わない。
+解除する場合は監視停止への承認を得た上で、Codex・Claude Code・Grok CLIの該当配布版 `scripts/observe.py` を実行する管理対象ハンドラーだけを削除する。Grok CLIは `~/.grok/hooks/agent-evolution.json` の管理対象を対象にする。Pi・OpenCodeは上記のagent-evolution.jsだけを削除する。既存のverify-changesなどのフックを残す。古いバックアップの丸ごと復元は、その後の設定変更を消すため通常の解除には使わない。
 
 ## 保存と実行範囲
 
@@ -78,7 +83,7 @@ python3 -I -S -B /absolute/path/to/release/scripts/observe.py --agent codex --cw
 python3 -I -S -B /absolute/path/to/release/scripts/observe.py --agent codex --state .evolution-observer list
 ```
 
-フック自身はモデルを呼ばない。Codex・Claude CodeのStop継続は、終了判定や質問を作る通常セッションのモデル応答を最大2回追加し得る。評価タスクやGEPAの呼び出しとは別である。Piの承認後は準備用の通常応答を開始する。実モデル評価・候補生成の回数上限は既存CLIで管理し、起動承認だけで以前の予算を再利用しない。
+フック自身はモデルを呼ばない。Codex・Claude Code・Grok CLIのStop継続は、終了判定や質問を作る通常セッションのモデル応答を最大2回追加し得る。評価タスクやGEPAの呼び出しとは別である。Piの承認後は準備用の通常応答を開始する。実モデル評価・候補生成の回数上限は既存CLIで管理し、起動承認だけで以前の予算を再利用しない。
 
 評価用の一時作業フォルダと `AGENT_EVOLUTION_EVALUATION=1` の処理は監視対象から除外し、改善評価が起動確認を再帰的に発生させないようにする。
 
@@ -86,7 +91,7 @@ python3 -I -S -B /absolute/path/to/release/scripts/observe.py --agent codex --st
 
 ## 検証
 
-Pythonテストは正常終了、未解決失敗、解消済みエラー、未確認、中断、無回答、辞退、承認、通知の重複、同時実行、期限切れ、別セッション、設定保全を確認する。JavaScriptテストはPi・OpenCodeのイベントと承認分岐、実Pythonスクリプトとの接続を確認する。
+Pythonテストは正常終了、未解決失敗、解消済みエラー、未確認、中断、無回答、辞退、承認、通知の重複、同時実行、期限切れ、別セッション、設定保全、Grok実行時の非Grok入口の無視を確認する。JavaScriptテストはPi・OpenCodeのイベントと承認分岐、実Pythonスクリプトとの接続を確認する。
 
 ```sh
 .venv/bin/python -m pytest -q
@@ -99,5 +104,6 @@ node --test tests/observer-integrations.test.mjs
 
 - [Codexのフックと信頼確認](https://learn.chatgpt.com/docs/hooks)
 - [Claude Codeのフック](https://code.claude.com/docs/en/hooks)
+- [Grok CLIのフック](https://docs.x.ai/build/features/hooks)
 - [Piの拡張](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md)
 - [OpenCodeのプラグイン](https://opencode.ai/docs/plugins/)
