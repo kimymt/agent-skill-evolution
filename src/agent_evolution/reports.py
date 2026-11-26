@@ -8,13 +8,38 @@ from .models import Experiment, Suite
 from .util import canonical, digest
 
 
+def _known(rows):
+    return {r["resolved_model"] for r in rows if r.get("resolved_model")}
+
+
+def _model_notes(profile, baseline, final, rows, subset, warnings, reasons):
+    """Same-model comparability of baseline and candidate on one profile.
+
+    Unknown names only warn: some harnesses never report one, and failing would
+    block every run on them. Two different known names are different test
+    conditions, so inside the holdout they also make the run inconclusive.
+    """
+    live = [r for r in rows if r["profile"] == profile and r["candidate"] in {baseline, final}
+            and r.get("evidence") == "live"]
+    unknown = [r for r in live if not r.get("resolved_model")]
+    if unknown:
+        warnings.append(f"{profile}: resolved model unknown in {len(unknown)} of {len(live)} live evaluations; "
+                        "baseline and candidate are not confirmed to use the same model")
+    names = {a: sorted(_known([r for r in live if r["candidate"] == c])) for a, c in (("baseline", baseline), ("candidate", final))}
+    if len(_known(live)) > 1:
+        warnings.append(f"{profile}: resolved models differ (baseline: {', '.join(names['baseline']) or 'unknown'}; "
+                        f"candidate: {', '.join(names['candidate']) or 'unknown'})")
+    if len(_known([r for r in subset if r.get("evidence") == "live"])) > 1:
+        reasons.append(f"{profile}: resolved model differs between baseline and candidate in the holdout")
+
+
 def decide(data, rows):
     cfg = Experiment.model_validate(data["config"])
     suite = Suite.model_validate(data["suite"])
     final = data["final_candidate"]
     if not final:
-        return {"status": "inconclusive", "reasons": ["Final candidate not frozen"], "profiles": {}}
-    reasons, profiles, gains = [], {}, []
+        return {"status": "inconclusive", "reasons": ["Final candidate not frozen"], "warnings": [], "profiles": {}}
+    reasons, warnings, profiles, gains = [], [], {}, []
     hard_failure = False
     search_cases = {c.id for c in suite.cases if c.split in {"train", "validation"}}
     for p in cfg.targets:
@@ -40,6 +65,7 @@ def decide(data, rows):
             continue
         if any(r["evidence"] != "live" for r in subset):
             reasons.append(f"{p.id}: simulation is not performance evidence")
+        _model_notes(p.id, data["baseline"], final, rows, subset, warnings, reasons)
         before = [r for r in subset if r["candidate"] == data["baseline"]]
         after = [r for r in subset if r["candidate"] == final]
         base = statistics.mean(float(r["passed"]) for r in before)
@@ -79,7 +105,7 @@ def decide(data, rows):
     if not gains or max(gains) < cfg.gates.min_gain:
         reasons.append("No profile meets the minimum improvement")
     status = "rejected" if hard_failure else ("inconclusive" if reasons else "eligible")
-    return {"status": status, "reasons": reasons, "profiles": profiles}
+    return {"status": status, "reasons": reasons, "warnings": warnings, "profiles": profiles}
 
 
 def report(store, run):
@@ -105,10 +131,12 @@ def report(store, run):
     lines = ["# Skill evaluation", "", f"Run: `{run}`", f"Report SHA-256: `{sha}`", "",
              f"Decision: **{result['decision']['status']}**", "",
              "Not evaluated: " + ", ".join(result["not_selected"]), "",
-             "| Profile | Case | Split | Candidate | Status | Passed | Evidence |",
-             "| --- | --- | --- | --- | --- | --- | --- |"]
+             "| Profile | Case | Split | Candidate | Status | Passed | Evidence | Resolved model |",
+             "| --- | --- | --- | --- | --- | --- | --- | --- |"]
     for r in rows:
-        lines.append(f"| {r['profile']} | {r['case']} | {r['split']} | {r['candidate'][:10]} | {r['status']} | {r['passed']} | {r['evidence']} |")
+        lines.append(f"| {r['profile']} | {r['case']} | {r['split']} | {r['candidate'][:10]} | {r['status']} | {r['passed']} | {r['evidence']} | {r.get('resolved_model') or 'unknown'} |")
+    if result["decision"]["warnings"]:
+        lines += ["", "## Warnings", ""] + [f"- {w}" for w in result["decision"]["warnings"]]
     lines += ["", "## Decision details", "", "```json", json_pretty(result["decision"]), "```", "",
               "Usage counts include failed launches. Unknown costs are not zero. No inference of quality for untested runtimes or models."]
     store.files.write_bytes(f"{relative}/report.md", "\n".join(lines) + "\n")

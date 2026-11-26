@@ -137,6 +137,22 @@ def _text_content(content) -> str | None:
     return None
 
 
+_MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
+
+
+def _model_name(value) -> str | None:
+    # Names come from untrusted agent output: accept only a short, plain identifier.
+    # Claude Code marks locally generated assistant turns with "<synthetic>"; that is no model.
+    return value if isinstance(value, str) and _MODEL_NAME.fullmatch(value) else None
+
+
+def _resolved(names, fallback=None) -> str | None:
+    # One model: its name. Several: sorted and comma-joined, so a mix stays visible
+    # and still compares unequal. None when the harness reported nothing usable.
+    found = sorted(set(names)) or ([fallback] if fallback else [])
+    return ",".join(found) or None
+
+
 def _zero_exit(value) -> bool:
     # bool is an int subclass; False must never stand in for an exit code.
     return type(value) is int and value == 0
@@ -155,6 +171,7 @@ def _parse_events(agent: str, output: str, skill_path: str, skill_text: str | No
     events, commands, reads, text, terminal = [], [], [], [], False
     usage, cost = None, None
     pending_tools, seen_tools = {}, set()
+    models, init_model = [], None
 
     def full_skill(content):
         return (isinstance(skill_text, str) and bool(skill_text) and Path(skill_path).is_absolute()
@@ -204,6 +221,12 @@ def _parse_events(agent: str, output: str, skill_path: str, skill_text: str | No
                     and item.get("status") == "completed" and _zero_exit(item.get("exit_code"))):
                 completed_command(item.get("command"), item.get("aggregated_output"))
         elif agent == "claude":
+            message = e.get("message")
+            if kind == "system" and e.get("subtype") == "init":
+                init_model = _model_name(e.get("model"))
+            # Only the main conversation: subagent turns carry a parent_tool_use_id.
+            if kind == "assistant" and e.get("parent_tool_use_id") is None and isinstance(message, dict):
+                models.append(_model_name(message.get("model")))
             if kind == "result":
                 terminal = e.get("is_error", False) is False and e.get("subtype") == "success"
                 text.append(e.get("result", ""))
@@ -243,6 +266,8 @@ def _parse_events(agent: str, output: str, skill_path: str, skill_text: str | No
                             completed_command(inp.get("command"), result["stdout"])
         elif agent == "opencode":
             part = e.get("part", {})
+            # Newer builds stamp providerID/modelID on each event; older ones omit them.
+            models.append(_model_name(e.get("modelID")))
             if kind == "finish" or (kind == "step_finish" and part.get("reason") == "stop"):
                 terminal = True
                 usage, cost = part.get("tokens"), part.get("cost")
@@ -256,10 +281,15 @@ def _parse_events(agent: str, output: str, skill_path: str, skill_text: str | No
                 if part.get("tool") == "bash" and _zero_exit(state.get("metadata", {}).get("exit")):
                     completed_command(inp.get("command"), state.get("output"))
         else:
+            final = e.get("message")
+            if kind == "message_end" and isinstance(final, dict) and final.get("role") == "assistant":
+                # responseModel is the concrete model the provider reported, when it does.
+                models.append(_model_name(final.get("responseModel")) or _model_name(final.get("model")))
             if kind == "agent_end":
                 terminal = True
                 for message in e.get("messages", []):
                     if message.get("role") == "assistant":
+                        models.append(_model_name(message.get("responseModel")) or _model_name(message.get("model")))
                         if message.get("stopReason") in {"error", "aborted"}:
                             terminal = False
                         usage = message.get("usage", usage)
@@ -279,4 +309,5 @@ def _parse_events(agent: str, output: str, skill_path: str, skill_text: str | No
         raise EvolutionError("Missing successful terminal event")
     return {"events": events, "commands": commands, "skill_read": bool(reads),
             "text": "\n".join(text), "usage": usage, "cost": cost,
+            "resolved_model": _resolved([m for m in models if m], init_model),
             "cost_status": "reported" if cost is not None else "unknown"}
