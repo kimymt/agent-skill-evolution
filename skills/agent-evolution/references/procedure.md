@@ -22,7 +22,7 @@
 
 `start --config PATH` と `doctor --config PATH` が読む JSON です。公式スキーマは配布リポジトリの `schemas/experiment.schema.json`、実例は `examples/codex-smoke.json` です。`skill` と `suite` は、設定ファイルがあるディレクトリからの相対パス、または絶対パスで書きます。必須項目は `skill`、`suite`、`targets` です。追加のキーは受け付けません。
 
-`targets` と `generator` の各プロファイルでは、`id`、`agent`、`effort`、`backend` が必須です。`model` は省略でき、省略時は各ハーネスの既定モデルを使います。評価結果には、指定した値（`requested_model`）と、実行出力から取れた実際のモデル名（`resolved_model`）を別々に記録します。出力から取れないハーネスでは `resolved_model` は `null` で、レポートに警告が出ます。ベースラインと候補で実際のモデル名が異なる場合も警告が出て、ホールドアウトでは判定が `inconclusive` になります。`agent` は `claude`、`codex`、`opencode`、`pi`。`backend` は `codex-native`、`docker`、`simulation`。`codex-native` は `agent` が `codex` のときだけ使えます。`version` は省略するか `"auto"` にすると実環境から取得し、明示した場合は完全一致を要求します。`network` の既定は `"none"`。`auth_env` に書けるのは `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`OPENROUTER_API_KEY` だけです。値ではなく変数名だけを書き、秘密情報は設定ファイルに含めません。
+`targets` と `generator` の各プロファイルでは、`id`、`agent`、`effort`、`backend` が必須です。`model` は省略でき、省略時は各ハーネスの既定モデルを使います。比較するときは `model` を指定してください。評価結果には、指定した値（`requested_model`）と、実行出力から取れた実際のモデル名（`resolved_model`）を別々に記録します。Codex では実行出力から実際のモデル名を記録できません。`model` を省略して実際のモデル名が取れない場合は、比較の信頼性が低い旨の警告が出ます。指定している場合は、名前が取れなくてもこの警告は出しません。ベースラインと候補で実際のモデル名が異なる場合は警告が出て、ホールドアウトでは判定が `inconclusive` になります。`agent` は `claude`、`codex`、`opencode`、`pi`。`backend` は `codex-native`、`docker`、`simulation`。`codex-native` は `agent` が `codex` のときだけ使えます。`version` は省略するか `"auto"` にすると実環境から取得し、明示した場合は完全一致を要求します。`network` の既定は `"none"`。`auth_env` に書けるのは `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`OPENROUTER_API_KEY` だけです。値ではなく変数名だけを書き、秘密情報は設定ファイルに含めません。
 
 `docker` は製品別の実効設定を読む診断が未実装のため、この配布では実評価を開始しません。`simulation` の結果は性能改善の証拠にも採用条件にも使いません。
 

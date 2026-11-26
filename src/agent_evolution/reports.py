@@ -15,16 +15,20 @@ def _known(rows):
 def _model_notes(profile, baseline, final, rows, subset, warnings, reasons):
     """Same-model comparability of baseline and candidate on one profile.
 
-    Unknown names only warn: some harnesses never report one, and failing would
-    block every run on them. Two different known names are different test
-    conditions, so inside the holdout they also make the run inconclusive.
+    An omitted model with no reported name only warns, and recommends specifying
+    model: some harnesses never report one, and failing would block every run on
+    them. A requested model with an unreported name is not a warning, because the
+    comparison is already pinned to that request. Two different known names are
+    different test conditions, so inside the holdout they also make the run
+    inconclusive.
     """
     live = [r for r in rows if r["profile"] == profile and r["candidate"] in {baseline, final}
             and r.get("evidence") == "live"]
-    unknown = [r for r in live if not r.get("resolved_model")]
-    if unknown:
-        warnings.append(f"{profile}: resolved model unknown in {len(unknown)} of {len(live)} live evaluations; "
-                        "baseline and candidate are not confirmed to use the same model")
+    unconfirmed = [r for r in live if not r.get("requested_model") and not r.get("resolved_model")]
+    if unconfirmed:
+        warnings.append(f"{profile}: resolved model unknown in {len(unconfirmed)} of {len(live)} "
+                        "live evaluations that omitted model; comparison is less reliable. "
+                        "Specify model when comparing")
     names = {a: sorted(_known([r for r in live if r["candidate"] == c])) for a, c in (("baseline", baseline), ("candidate", final))}
     if len(_known(live)) > 1:
         warnings.append(f"{profile}: resolved models differ (baseline: {', '.join(names['baseline']) or 'unknown'}; "

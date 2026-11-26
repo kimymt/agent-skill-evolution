@@ -112,8 +112,12 @@ def test_trial_without_explicit_model_records_null_requested(tmp_path):
 
 # -- comparability --------------------------------------------------------
 
-def finished(experiment, models):
-    """Frozen run whose holdout rows carry the given resolved model per candidate."""
+def finished(experiment, models, requested="keep"):
+    """Frozen run whose holdout rows carry the given resolved model per candidate.
+
+    requested="keep" leaves the trial's requested_model (the fixture sets "fake").
+    Pass None to test a profile that omitted model.
+    """
     store, r = experiment
     sha = r.add_candidate("\nInvestigate. SIMULATION_PASS\n")
     r.select(sha)
@@ -123,6 +127,8 @@ def finished(experiment, models):
     for row in store.evaluations(r.id):
         row["evidence"] = "live"
         row["resolved_model"] = models(row)
+        if requested != "keep":
+            row["requested_model"] = requested
         store.save_eval(r.id, row["key"], row)
     return store, r, sha
 
@@ -134,21 +140,38 @@ def test_same_model_gives_no_warning(experiment):
     assert decision["status"] == "eligible"
 
 
-def test_unknown_model_only_warns(experiment):
+def test_unknown_with_requested_model_does_not_warn(experiment):
     store, r, _ = finished(experiment, lambda row: None)
     decision = decide(r.data, store.evaluations(r.id))
-    assert any("resolved model unknown" in w for w in decision["warnings"])
+    assert decision["warnings"] == []
     assert decision["status"] == "eligible"
 
 
-def test_partly_unknown_model_warns_with_counts(experiment):
-    store, r, sha = finished(experiment, lambda row: None if row["case"] == "case-2" else "model-a")
+def test_unknown_without_requested_model_warns_and_recommends(experiment):
+    store, r, _ = finished(experiment, lambda row: None, requested=None)
+    decision = decide(r.data, store.evaluations(r.id))
+    assert any("omitted model" in w and "comparison is less reliable" in w
+               and "Specify model when comparing" in w for w in decision["warnings"])
+    assert decision["status"] == "eligible"
+
+
+def test_partly_unknown_with_requested_model_does_not_warn(experiment):
+    store, r, _ = finished(experiment, lambda row: None if row["case"] == "case-2" else "model-a")
+    decision = decide(r.data, store.evaluations(r.id))
+    assert decision["warnings"] == []
+    assert decision["status"] == "eligible"
+
+
+def test_partly_unknown_without_requested_model_warns_with_counts(experiment):
+    store, r, sha = finished(experiment, lambda row: None if row["case"] == "case-2" else "model-a",
+                             requested=None)
     rows = store.evaluations(r.id)
     live = [x for x in rows if x["candidate"] in {r.data["baseline"], sha}]
     missing = [x for x in live if x["resolved_model"] is None]
     assert 0 < len(missing) < len(live)
     decision = decide(r.data, rows)
-    assert [w for w in decision["warnings"] if f"unknown in {len(missing)} of {len(live)} " in w]
+    assert [w for w in decision["warnings"] if f"unknown in {len(missing)} of {len(live)} " in w
+            and "omitted model" in w]
     assert decision["status"] == "eligible"
 
 
@@ -163,7 +186,7 @@ def test_baseline_candidate_mismatch_warns_and_blocks(experiment):
 
 
 def test_report_shows_warning_and_resolved_model_column(experiment):
-    store, r, _ = finished(experiment, lambda row: None)
+    store, r, _ = finished(experiment, lambda row: None, requested=None)
     _, folder = report(store, r.id)
     text = (folder / "report.md").read_text()
     assert "| Resolved model |" in text and "## Warnings" in text and "unknown" in text
@@ -179,10 +202,13 @@ def test_report_without_warnings_has_no_warning_section(experiment):
 
 
 def test_explicit_model_behaviour_is_unchanged(experiment):
-    # Profile still says model="fake": status logic ignores requested_model entirely.
+    # A requested model still leaves status and reasons unchanged when the name
+    # is unreported. Legacy rows without these keys stay eligible; they may warn
+    # because an omitted request is indistinguishable from a missing field.
     store, r, _ = finished(experiment, lambda row: None)
     assert r.config.targets[0].model == "fake"
     with_names = decide(r.data, store.evaluations(r.id))
+    assert with_names["warnings"] == []
     for row in store.evaluations(r.id):
         row.pop("resolved_model")
         row.pop("requested_model", None)  # rows written before this change
