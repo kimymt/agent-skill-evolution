@@ -7,7 +7,7 @@
       "agent": "codex",
       "model": "gpt-6-astra",
       "effort": "high",
-      "version": "0.160.0",
+      "version": "auto",
       "backend": "codex-native",
       "image": null,
       "network": "none",

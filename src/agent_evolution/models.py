@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator, field_valida
 
 from .util import EvolutionError, safe_relative, reject_secrets
 
+AgentName = Literal["claude", "codex", "opencode", "pi"]
+AGENTS = ("claude", "codex", "opencode", "pi")
+
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -68,10 +71,10 @@ class Suite(Strict):
 
 class Profile(Strict):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
-    agent: Literal["claude", "codex", "opencode", "pi"]
+    agent: AgentName
     model: str = Field(min_length=1)
     effort: str = Field(min_length=1)
-    version: str = Field(min_length=1)
+    version: str | None = Field(default=None, min_length=1)
     backend: Literal["codex-native", "docker", "simulation"]
     image: str | None = None
     network: str = "none"
@@ -79,8 +82,8 @@ class Profile(Strict):
 
     @model_validator(mode="after")
     def compatible(self):
-        if self.backend == "codex-native" and (self.agent != "codex" or self.version != "0.160.0"):
-            raise ValueError("Native profile currently requires Codex 0.160.0")
+        if self.backend == "codex-native" and self.agent != "codex":
+            raise ValueError("The native backend requires the Codex adapter")
         if self.backend == "docker" and (not self.image or not re.fullmatch(r"[^\s@]+@sha256:[a-f0-9]{64}", self.image)):
             raise ValueError("Docker image must be pinned by digest")
         for key in self.auth_env:

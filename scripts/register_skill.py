@@ -3,8 +3,13 @@
 from pathlib import Path
 
 project = Path(__file__).resolve().parents[1]
-skill = project.parent / "agent-skills/agent-evolution"
-if not (skill / "SKILL.md").is_file():
+in_repo = project / "skills/agent-evolution"
+sibling = project.parent / "agent-skills/agent-evolution"
+if (in_repo / "SKILL.md").is_file():
+    skill = in_repo
+elif (sibling / "SKILL.md").is_file():
+    skill = sibling
+else:
     raise SystemExit("Canonical skill is missing")
 targets = [Path.home() / ".agents/skills/agent-evolution", Path.home() / ".claude/skills/agent-evolution"]
 for target in targets:

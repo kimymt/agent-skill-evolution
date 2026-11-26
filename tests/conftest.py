@@ -1,3 +1,23 @@
+import json
+import sys
+from pathlib import Path as _Path
+
+def _ensure_observer_runtime_for_tests():
+    """Write a gitignored observer-runtime.json so source tests can import the observer."""
+    project = _Path(__file__).resolve().parents[1]
+    skill = project / "skills/agent-evolution/SKILL.md"
+    python = _Path(sys.executable).resolve()
+    if not skill.is_file() or not python.is_file():
+        return
+    path = project / "observer-runtime.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "python": str(python),
+        "skill": str(skill),
+    }) + "\n", encoding="utf-8")
+
+_ensure_observer_runtime_for_tests()
+
 import pytest
 
 from agent_evolution.models import Experiment, Profile, Suite, Case, Check, Budget

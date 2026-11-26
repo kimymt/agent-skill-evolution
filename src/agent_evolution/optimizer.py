@@ -10,6 +10,7 @@ from .artifacts import parse_skill, materialize
 from .adapters import parse_events
 from .isolation import run_agent
 from .runner import Runner
+from .secret_scan import scan_values, scan_streams
 from .util import EvolutionError, canonical, reject_secrets
 
 
@@ -22,6 +23,7 @@ class ReflectionModel:
         profile = r.config.generator
         if profile is None or profile.backend == "simulation":
             raise EvolutionError("Configure an explicit live generator profile")
+        identity = r.check_environment(profile)
         r.store.reserve(r.id, "generation", r.config.budget.max_generations, r.deadline)
         text = prompt if isinstance(prompt, str) else canonical(prompt)
         reject_secrets(text)
@@ -30,14 +32,17 @@ class ReflectionModel:
             artifact = r.data["artifacts"][r.data["baseline"]]
             folder = work / ".agents/skills" / artifact["name"]
             materialize(artifact, folder)
-            r.scan(work)
+            r.scan(work, identity["scanner"]["resolved"])
+            scan_values(prompt, text, scanner=identity["scanner"]["resolved"])
             result = run_agent(profile, work, text, folder,
                                min(r.config.budget.task_seconds, max(.01, r.deadline - time.time())),
-                               r.config.budget.max_output_bytes, r.cancel)
+                               r.config.budget.max_output_bytes, r.cancelled, expected_identity=identity)
+            scan_streams(result.stdout, result.stderr, scanner=identity["scanner"]["resolved"])
             if result.status != "completed":
                 raise EvolutionError("Reflection model did not complete")
             reject_secrets(result.stdout)
             output = parse_events(profile.agent, result.stdout, "unused")
+            scan_values(output, scanner=identity["scanner"]["resolved"])
             if not output["text"].strip():
                 raise EvolutionError("Reflection model returned empty output")
             r.store.event(r.id, "generation", {"profile": profile.model_dump(), "usage": output.get("usage"),
@@ -74,9 +79,9 @@ class Adapter:
                 for row in rows:
                     item = {"profile": row["profile"]}
                     for kind in ("trace", "outputs"):
-                        path = r.path / f"{row['key']}.{kind}.json"
-                        if path.is_file():
-                            text = path.read_text()
+                        content = r.store.files.read_bytes(f"{r.relative_path}/{row['key']}.{kind}.json", missing_ok=True)
+                        if content is not None:
+                            text = content.decode()
                             reject_secrets(text)
                             item[kind] = json.loads(text)
                     evidence.append(item)

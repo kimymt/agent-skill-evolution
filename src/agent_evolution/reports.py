@@ -5,7 +5,7 @@ import random
 import statistics
 
 from .models import Experiment, Suite
-from .util import canonical, digest, atomic_write
+from .util import canonical, digest
 
 
 def decide(data, rows):
@@ -92,15 +92,16 @@ def report(store, run):
               "not_selected": sorted({"claude", "codex", "opencode", "pi"} - {p["agent"] for p in data["config"]["targets"]})}
     sha = digest(canonical(result))
     folder = store.root / "reports" / run
-    atomic_write(folder / "report.json", canonical(result))
+    relative = folder.relative_to(store.root).as_posix()
+    store.files.write_bytes(f"{relative}/report.json", canonical(result))
     baseline = data["artifacts"][data["baseline"]]["files"]["SKILL.md"]["text"]
     diff = ""
-    atomic_write(folder / "baseline.SKILL.md", baseline)
+    store.files.write_bytes(f"{relative}/baseline.SKILL.md", baseline)
     if data["selected"]:
         selected = data["artifacts"][data["selected"]]["files"]["SKILL.md"]["text"]
-        atomic_write(folder / "candidate.SKILL.md", selected)
+        store.files.write_bytes(f"{relative}/candidate.SKILL.md", selected)
         diff = "".join(difflib.unified_diff(baseline.splitlines(True), selected.splitlines(True), "baseline/SKILL.md", "candidate/SKILL.md"))
-    atomic_write(folder / "skill.diff", diff)
+    store.files.write_bytes(f"{relative}/skill.diff", diff)
     lines = ["# Skill evaluation", "", f"Run: `{run}`", f"Report SHA-256: `{sha}`", "",
              f"Decision: **{result['decision']['status']}**", "",
              "Not evaluated: " + ", ".join(result["not_selected"]), "",
@@ -110,7 +111,7 @@ def report(store, run):
         lines.append(f"| {r['profile']} | {r['case']} | {r['split']} | {r['candidate'][:10]} | {r['status']} | {r['passed']} | {r['evidence']} |")
     lines += ["", "## Decision details", "", "```json", json_pretty(result["decision"]), "```", "",
               "Usage counts include failed launches. Unknown costs are not zero. No inference of quality for untested runtimes or models."]
-    atomic_write(folder / "report.md", "\n".join(lines) + "\n")
+    store.files.write_bytes(f"{relative}/report.md", "\n".join(lines) + "\n")
     return sha, folder
 
 

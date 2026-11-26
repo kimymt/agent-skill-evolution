@@ -7,6 +7,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 
 @dataclass
@@ -19,7 +20,8 @@ class ProcessResult:
 
 
 def execute(argv: list[str], cwd: Path, timeout: float, limit: int = 2_000_000,
-            env: dict | None = None, cancel: Path | None = None, stdin: str = "") -> ProcessResult:
+            env: dict | None = None, cancel: Path | Callable[[], bool] | None = None,
+            stdin: str = "") -> ProcessResult:
     started = time.monotonic()
     try:
         p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE,
@@ -41,7 +43,7 @@ def execute(argv: list[str], cwd: Path, timeout: float, limit: int = 2_000_000,
     state = "completed"
     try:
         while sel.get_map():
-            if cancel and cancel.exists():
+            if cancel is not None and (cancel() if callable(cancel) else cancel.exists()):
                 state = "cancelled"
                 break
             if time.monotonic() - started > timeout:

@@ -110,9 +110,17 @@
           "type": "string"
         },
         "version": {
-          "minLength": 1,
-          "title": "Version",
-          "type": "string"
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
         },
         "backend": {
           "enum": [
@@ -153,7 +161,6 @@
         "agent",
         "model",
         "effort",
-        "version",
         "backend"
       ],
       "title": "Profile",
