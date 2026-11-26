@@ -4,10 +4,29 @@ import json
 import uuid
 from pathlib import Path
 
-from .artifacts import snapshot, candidate, parse_skill, verify_snapshot
+from .artifacts import candidate, parse_skill, verify_snapshot
 from .reports import report, decide
-from .runner import Runner
+from .runner import Runner, input_path, _snapshot_input
 from .util import EvolutionError, atomic_write, canonical, digest, lock
+
+
+def _skill_lock(store, target):
+    path = target.parent / f".{target.name}.evolution.lock"
+    resolved = input_path(store, path)
+    if resolved.is_relative_to(store.root):
+        return store.files.lock(resolved.relative_to(store.root).as_posix())
+    return lock(path)
+
+
+def _write_skill(store, target, content):
+    path = target / "SKILL.md"
+    resolved = input_path(store, path)
+    if resolved.is_relative_to(store.root):
+        if content["mode"] != 0o600:
+            raise EvolutionError("Stored skill mode does not meet private state permissions")
+        store.files.write_bytes(resolved.relative_to(store.root).as_posix(), content["text"])
+    else:
+        atomic_write(path, content["text"], content["mode"])
 
 
 def approve(store, run, candidate_sha, report_sha):
@@ -41,15 +60,15 @@ def promote(store, run, candidate_sha, report_sha):
     _, _, body = parse_skill(new["files"]["SKILL.md"]["text"])
     if candidate(base, body)["hash"] != new["hash"]:
         raise EvolutionError("Protected files or frontmatter changed")
-    with lock(target.parent / f".{target.name}.evolution.lock"):
-        if snapshot(target)["hash"] != base["hash"]:
+    with _skill_lock(store, target):
+        if _snapshot_input(store, target)["hash"] != base["hash"]:
             raise EvolutionError("Canonical skill changed since evaluation")
         ident = uuid.uuid4().hex
         entry = {"id": ident, "run": run, "target": str(target), "before": base, "after": new,
                  "report": report_sha, "status": "prepared"}
         with store.db:
             store.db.execute("INSERT INTO promotions VALUES(?,?)", (ident, canonical(entry)))
-        atomic_write(target / "SKILL.md", new["files"]["SKILL.md"]["text"], new["files"]["SKILL.md"]["mode"])
+        _write_skill(store, target, new["files"]["SKILL.md"])
         entry["status"] = "promoted"
         with store.db:
             store.db.execute("UPDATE promotions SET data=? WHERE id=?", (canonical(entry), ident))
@@ -68,12 +87,12 @@ def rollback(store, ident):
     target = Path(entry["target"])
     verify_snapshot(entry["before"])
     verify_snapshot(entry["after"])
-    with lock(target.parent / f".{target.name}.evolution.lock"):
-        current = snapshot(target)["hash"]
+    with _skill_lock(store, target):
+        current = _snapshot_input(store, target)["hash"]
         if current not in {entry["before"]["hash"], entry["after"]["hash"]}:
             raise EvolutionError("Canonical skill has subsequent edits; refusing overwrite")
         old = entry["before"]["files"]["SKILL.md"]
-        atomic_write(target / "SKILL.md", old["text"], old["mode"])
+        _write_skill(store, target, old)
         entry["status"] = "rolled_back"
         with store.db:
             store.db.execute("UPDATE promotions SET data=? WHERE id=?", (canonical(entry), ident))

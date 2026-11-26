@@ -1,51 +1,49 @@
 from __future__ import annotations
 
 import json
+import sys
 import os
 import re
 import shutil
 import shlex
 from pathlib import Path
 
-from .models import Profile
+from .models import AGENTS, Profile
 from .process import execute
 from .util import EvolutionError, canonical
 
 
 def shell_commands(command_text: str) -> list[list[str]]:
-    """Recognize simple shell invocations, not text quoted by echo/printf."""
+    """Accept one literal command, optionally inside an exact system-shell -c.
+
+    This is a deliberately restricted evidence format, not a shell interpreter.
+    Even quoted expansions, operators and glob characters are unsupported.
+    """
+    if not isinstance(command_text, str) or any(c in command_text for c in
+            ";&|()<>\n\r\x00$`\\#*?[]{}!~"):
+        return []
     try:
         words = shlex.split(command_text)
-        if len(words) >= 3 and Path(words[0]).name in {"sh", "bash", "zsh"} and words[1] in {"-c", "-lc"}:
-            command_text = words[2]
-        lexer = shlex.shlex(command_text, posix=True, punctuation_chars=";&|()<>\n")
-        lexer.whitespace = " \t\r"
-        lexer.whitespace_split = True
-        result, part = [], []
-        for word in lexer:
-            if word and all(c in ";&|()<>\n" for c in word):
-                if any(c not in ";\n" for c in word):
-                    return []
-                if part:
-                    result.append(part)
-                part = []
-            else:
-                part.append(word)
-        if part:
-            result.append(part)
-        # A shell's exit code proves only its last command succeeded. Accept
-        # simple invocations, optionally preceded by PATH-style exports.
-        if any(parts[0] != "export" or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=[^`]*", x) for x in parts[1:])
-               for parts in result[:-1]):
+        shells = {"sh", "bash", "zsh"}
+        if words and Path(words[0]).name in shells:
+            if len(words) != 3 or words[0] not in {"/bin/sh", "/bin/bash", "/bin/zsh"} or words[1] != "-c":
+                return []
+            words = shlex.split(words[2])
+        if not words or "=" in words[0] or words[0].startswith("-") or any(w.startswith("=") for w in words):
             return []
-        if any("$(" in x or "`" in x for parts in result for x in parts):
+        if Path(words[0]).name in shells or words[0] in {
+                "export", "unset", "env", "cd", "exec", "command", "builtin", "source", ".",
+                "if", "then", "else", "fi", "for", "while", "until", "do", "done", "case", "esac",
+                "time", "coproc", "noglob", "nocorrect", "function", "select", "repeat"}:
             return []
-        return result[-1:]
+        return [words]
     except ValueError:
         return []
 
 
 def probe(agent: str) -> dict:
+    if agent not in AGENTS:
+        raise EvolutionError("Unknown agent adapter")
     binary = shutil.which(agent)
     if not binary:
         return {"agent": agent, "available": False, "reason": "not_on_path"}
@@ -55,14 +53,33 @@ def probe(agent: str) -> dict:
             "version": version[0] if version else None, "binary": binary, "status": r.status}
 
 
+def evaluation_python_bindir() -> Path:
+    return Path(sys.executable).resolve().parent
+
+
+def evaluation_python_read_root() -> Path:
+    """Filesystem root Codex may read so the evaluating Python can start."""
+    parts = Path(sys.executable).resolve().parts
+    if "Python.framework" in parts:
+        return Path(*parts[: parts.index("Python.framework") + 1])
+    return Path(sys.executable).resolve().parent
+
+
 def codex_permissions(work: Path) -> list[str]:
-    permissions = '{evolution={filesystem={":root"="deny",":minimal"="read",":workspace_roots"={"."="write",".agents"="read",".git"="read"},":tmpdir"="deny",":slash_tmp"="deny","/Library/Frameworks/Python.framework"="read"},network={enabled=false}}}'
+    permissions = (
+        '{evolution={filesystem={":root"="deny",":minimal"="read",":workspace_roots"='
+        '{"."="write",".agents"="read",".git"="read"},":tmpdir"="deny",":slash_tmp"="deny",'
+        + json.dumps(str(evaluation_python_read_root()))
+        + '="read"},network={enabled=false}}}'
+    )
     values = {
         "default_permissions": '"evolution"',
         "permissions": permissions,
         "approval_policy": '"never"',
         "shell_environment_policy.inherit": '"none"',
-        "shell_environment_policy.set.PATH": '"/Library/Frameworks/Python.framework/Versions/3.13/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
+        "shell_environment_policy.set.PATH": json.dumps(
+            str(evaluation_python_bindir()) + ":/usr/bin:/bin:/usr/sbin:/sbin"
+        ),
         "web_search": '"disabled"',
         "features.hooks": "false", "features.memories": "false",
         "features.multi_agent": "false", "features.plugins": "false",
@@ -82,6 +99,8 @@ def codex_permissions(work: Path) -> list[str]:
 
 
 def command(profile: Profile, work: Path, prompt: str) -> list[str]:
+    if profile.agent not in AGENTS:
+        raise EvolutionError("Unknown agent adapter")
     if profile.agent == "codex":
         args = ["codex", "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
                 "--skip-git-repo-check", "--strict-config", "-m", profile.model,
@@ -97,14 +116,62 @@ def command(profile: Profile, work: Path, prompt: str) -> list[str]:
                 "--mcp-config", '{"mcpServers":{}}', "--allowedTools", "Read,Write,Edit,Bash", prompt]
     if profile.agent == "opencode":
         return ["opencode", "run", "--format", "json", "--model", profile.model, "--variant", profile.effort, prompt]
-    return ["pi", "--mode", "json", "-p", "--no-session", "--no-extensions", "--no-prompt-templates",
-            "--no-context-files", "--model", profile.model, "--thinking", profile.effort, prompt]
+    if profile.agent == "pi":
+        return ["pi", "--mode", "json", "-p", "--no-session", "--no-extensions", "--no-prompt-templates",
+                "--no-context-files", "--model", profile.model, "--thinking", profile.effort, prompt]
+    raise EvolutionError("Unknown agent adapter")
 
 
-def parse_events(agent: str, output: str, skill_path: str) -> dict:
+def _text_content(content) -> str | None:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list) and all(isinstance(p, dict) and p.get("type") == "text"
+                                        and isinstance(p.get("text"), str) for p in content):
+        return "".join(p["text"] for p in content)
+    return None
+
+
+def _zero_exit(value) -> bool:
+    # bool is an int subclass; False must never stand in for an exit code.
+    return type(value) is int and value == 0
+
+
+def parse_events(agent: str, output: str, skill_path: str, *, skill_text: str | None = None) -> dict:
+    try:
+        return _parse_events(agent, output, skill_path, skill_text)
+    except (TypeError, AttributeError, KeyError, ValueError):
+        raise EvolutionError("Invalid agent event schema; evaluation evidence rejected") from None
+
+
+def _parse_events(agent: str, output: str, skill_path: str, skill_text: str | None) -> dict:
+    if agent not in AGENTS:
+        raise EvolutionError("Unknown agent adapter")
     events, commands, reads, text, terminal = [], [], [], [], False
     usage, cost = None, None
-    pending_tools = {}
+    pending_tools, seen_tools = {}, set()
+
+    def full_skill(content):
+        return (isinstance(skill_text, str) and bool(skill_text) and Path(skill_path).is_absolute()
+                and _text_content(content) == skill_text)
+
+    def read_tool(inp, path_key, content):
+        if set(inp) == {path_key} and inp[path_key] == skill_path and full_skill(content):
+            reads.append(skill_path)
+
+    def completed_command(cmd, content):
+        parts = shell_commands(cmd)
+        if not parts:
+            return
+        commands.append(cmd)
+        if len(parts[0]) == 2 and parts[0][0] in {"/bin/cat", "/usr/bin/cat"} and parts[0][1] == skill_path and full_skill(content):
+            reads.append(skill_path)
+
+    def start_tool(tool_id, name, inp):
+        if not isinstance(tool_id, str) or not tool_id or tool_id in seen_tools or not isinstance(inp, dict):
+            raise EvolutionError("Invalid or duplicate tool identity; evaluation evidence rejected")
+        seen_tools.add(tool_id)
+        pending_tools[tool_id] = (name, inp)
+
     for line in output.splitlines():
         if not line.strip():
             continue
@@ -127,25 +194,47 @@ def parse_events(agent: str, output: str, skill_path: str) -> dict:
             item = e.get("item", {})
             if kind == "item.completed" and item.get("type") == "agent_message":
                 text.append(item.get("text", ""))
-            if kind == "item.completed" and item.get("type") == "command_execution" and item.get("exit_code") == 0:
-                cmd = item.get("command", "")
-                commands.append(cmd)
-                if any(Path(parts[0]).name == "cat" and any(x == skill_path or x.endswith("/" + skill_path) for x in parts[1:]) for parts in shell_commands(cmd)):
-                    reads.append(skill_path)
+            if (kind == "item.completed" and item.get("type") == "command_execution"
+                    and item.get("status") == "completed" and _zero_exit(item.get("exit_code"))):
+                completed_command(item.get("command"), item.get("aggregated_output"))
         elif agent == "claude":
             if kind == "result":
-                terminal = not e.get("is_error", False) and e.get("subtype") == "success"
+                terminal = e.get("is_error", False) is False and e.get("subtype") == "success"
                 text.append(e.get("result", ""))
                 usage, cost = e.get("usage"), e.get("total_cost_usd")
-            for part in e.get("message", {}).get("content", []):
-                if part.get("type") == "tool_use":
-                    pending_tools[part["id"]] = (part.get("name"), part.get("input", {}))
-                if part.get("type") == "tool_result" and not part.get("is_error", False):
-                    name, inp = pending_tools.get(part.get("tool_use_id"), (None, {}))
-                    if name == "Read" and inp.get("file_path", "").endswith(skill_path):
-                        reads.append(skill_path)
+            parts = e.get("message", {}).get("content", [])
+            for part in parts:
+                if kind == "assistant" and part.get("type") == "tool_use":
+                    start_tool(part["id"], part.get("name"), part.get("input", {}))
+                if kind == "user" and part.get("type") == "tool_result":
+                    name, inp = pending_tools.pop(part.get("tool_use_id"), (None, {}))
+                    # Anthropic's tool_result schema permits omission on success.
+                    if part.get("is_error", False) is not False:
+                        continue
+                    if name == "Read" and len(parts) == 1:
+                        result = e.get("tool_use_result", {})
+                        file = result.get("file", {})
+                        # Claude decorates tool_result content with line numbers.
+                        # Its structured text result preserves the returned body.
+                        line_count = skill_text.count("\n") + 1 if isinstance(skill_text, str) else None
+                        if (result.get("type") == "text" and file.get("filePath") == skill_path
+                                and type(file.get("startLine")) is int and file["startLine"] == 1
+                                and type(file.get("numLines")) is int and file["numLines"] == line_count
+                                and type(file.get("totalLines")) is int and file["totalLines"] == line_count
+                                and file.get("truncatedByTokenCap", False) is False):
+                            read_tool(inp, "file_path", file.get("content"))
                     if name == "Bash":
-                        commands.append(inp.get("command", ""))
+                        result = e.get("tool_use_result", {})
+                        # A non-error background launch is not completed execution.
+                        # Require one result so this metadata cannot bind to another tool.
+                        if (len(parts) == 1 and inp.get("run_in_background", False) is False
+                                and isinstance(result, dict) and result.get("interrupted") is False
+                                and result.get("backgroundTaskId") is None
+                                and result.get("backgroundedByUser", False) is False
+                                and result.get("isImage", False) is False
+                                and result.get("returnCodeInterpretation") is None
+                                and isinstance(result.get("stdout"), str) and isinstance(result.get("stderr"), str)):
+                            completed_command(inp.get("command"), result["stdout"])
         elif agent == "opencode":
             part = e.get("part", {})
             if kind == "finish" or (kind == "step_finish" and part.get("reason") == "stop"):
@@ -154,11 +243,12 @@ def parse_events(agent: str, output: str, skill_path: str) -> dict:
             if kind == "text":
                 text.append(part.get("text", ""))
             if kind == "tool_use" and part.get("state", {}).get("status") == "completed":
-                inp = part["state"].get("input", {})
-                if part.get("tool") == "read" and inp.get("filePath", "").endswith(skill_path):
-                    reads.append(skill_path)
-                if part.get("tool") == "bash":
-                    commands.append(inp.get("command", ""))
+                state = part["state"]
+                inp = state.get("input", {})
+                if part.get("tool") == "read":
+                    read_tool(inp, "filePath", state.get("output"))
+                if part.get("tool") == "bash" and _zero_exit(state.get("metadata", {}).get("exit")):
+                    completed_command(inp.get("command"), state.get("output"))
         else:
             if kind == "agent_end":
                 terminal = True
@@ -169,18 +259,18 @@ def parse_events(agent: str, output: str, skill_path: str) -> dict:
                         usage = message.get("usage", usage)
                         text.extend(p.get("text", "") for p in message.get("content", []) if p.get("type") == "text")
             if kind == "tool_execution_start":
-                pending_tools[e.get("toolCallId")] = (e.get("toolName"), e.get("args", {}))
-            if kind == "tool_execution_end" and not e.get("isError", False):
-                name, inp = pending_tools.get(e.get("toolCallId"), (None, {}))
-                if name == "read" and inp.get("path", "").endswith(skill_path):
-                    reads.append(skill_path)
-                if name == "bash":
-                    commands.append(inp.get("command", ""))
+                start_tool(e.get("toolCallId"), e.get("toolName"), e.get("args", {}))
+            if kind == "tool_execution_end":
+                name, inp = pending_tools.pop(e.get("toolCallId"), (None, {}))
+                if e.get("isError") is not False:
+                    continue
+                result = e.get("result", {})
+                if name == "read":
+                    read_tool(inp, "path", result.get("content"))
+                if name == "bash" and _zero_exit(result.get("structuredContent", {}).get("exit_code")):
+                    completed_command(inp.get("command"), result.get("content"))
     if not terminal:
         raise EvolutionError("Missing successful terminal event")
-    if any(Path(parts[0]).name == "cat" and any(x == skill_path or x.endswith("/" + skill_path) for x in parts[1:])
-           for cmd in commands for parts in shell_commands(cmd)):
-        reads.append(skill_path)
     return {"events": events, "commands": commands, "skill_read": bool(reads),
             "text": "\n".join(text), "usage": usage, "cost": cost,
             "cost_status": "reported" if cost is not None else "unknown"}

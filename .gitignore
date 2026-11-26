@@ -21,12 +21,16 @@ runs/
 .env.*
 *.env
 *.bak
+*.bak-*
 *.orig
 *.before-agent-evolution-*
 .DS_Store
 Thumbs.db
 
-# Local evidence and environment-specific samples excluded from this distribution
+# Machine-local observer runtime (absolute python / skill paths)
+observer-runtime.json
+
+# Local evidence and environment-specific samples
 /manifest.json
 /applied-manifest.json
 /applied-diff.patch
@@ -34,5 +38,6 @@ Thumbs.db
 /VERIFICATION.md
 /OBSERVER_VERIFICATION.md
 /DESIGN_PLAN.md
+/PUBLISHING_HANDOFF.md
 /examples/codex-local-check.json
 /fixtures/codex-local-smoke.json

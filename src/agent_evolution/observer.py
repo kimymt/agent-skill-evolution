@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import fcntl
+import errno
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -13,15 +14,178 @@ import sys
 import time
 import uuid
 
-from .util import EvolutionError, atomic_write, canonical, digest, redact
+from .util import EvolutionError, canonical, digest, redact
+from .state import PrivateState, StateError
 
 PROJECT = Path(__file__).resolve().parents[2]
-SKILL = PROJECT.parent / "agent-skills/agent-evolution/SKILL.md"
 MARKER = "[agent-evolution-observer]"
 APPROVED = "[agent-evolution-approved]"
-AGENTS = ("codex", "claude", "opencode", "pi")
+AGENTS = ("codex", "claude", "opencode", "pi", "grok")
 STATUSES = ("passed", "failed", "unverified", "cancelled")
 TTL = 7 * 86400
+
+MAX_BYTES = 1_000_000
+ERRORS = {
+    "E_PERMISSION": "保存先の所有者・権限・ACLが条件を満たさないか、アクセスが拒否されました。保存先を確認してください。",
+    "E_STATE_MISSING": "この作業の開始記録がありません。新しいユーザー入力から監視を開始してください。",
+    "E_TASK_CLOSED": "この作業は終了済みまたは監視対象外です。新しい作業の記録先を使ってください。",
+    "E_TASK_EXPIRED": "この作業の記録期限が切れています。新しい作業として開始してください。",
+    "E_INPUT": "監視入力が不正です。接続部分の入力形式を確認してください。",
+    "E_INPUT_TOO_LARGE": "監視入力が上限を超えました。接続部分の入力サイズを確認してください。",
+    "E_STATE_CORRUPT": "保存データの形式が不正です。対象の記録を確認してください。",
+    "E_UNSAFE_PATH": "保存先にリンクまたは想定外のファイル種別があります。通常のディレクトリを指定してください。",
+    "E_IO": "監視記録の入出力に失敗しました。保存先の状態を確認してください。",
+    "E_NOTICE_DECIDED": "この通知への返答は記録済みです。二重に決定しないでください。",
+    "E_NOTICE_EXPIRED": "この通知の有効期限が切れています。新しい作業結果を確認してください。",
+    "E_RUNTIME_CONFIG": "監視用ランタイムの設定がないか不正です。配布物を確認してください。",
+}
+
+
+class ObserverError(EvolutionError):
+    def __init__(self, code):
+        self.code = code
+        # Keep exception text fixed as well: callers must never expose input data.
+        super().__init__(code + ": " + ERRORS[code])
+
+
+def runtime_config():
+    """Use only the configuration shipped alongside this observer release."""
+    try:
+        data = json.loads((PROJECT / "observer-runtime.json").read_text(encoding="utf-8"))
+        if (not isinstance(data, dict) or set(data) != {"version", "python", "skill"}
+                or type(data["version"]) is not int or data["version"] != 1
+                or any(not isinstance(data[key], str) or not data[key].strip()
+                       or "\x00" in data[key] or not Path(data[key]).is_absolute()
+                       for key in ("python", "skill"))):
+            raise ValueError
+    except (OSError, ValueError, TypeError):
+        raise ObserverError("E_RUNTIME_CONFIG") from None
+    return data
+
+
+RUNTIME = runtime_config()
+SKILL = Path(RUNTIME["skill"])
+
+
+def valid_identity(agent, cwd, session):
+    if (agent not in AGENTS or not isinstance(cwd, str) or not cwd or "\x00" in cwd
+            or not isinstance(session, str) or not session or len(session) > 1024):
+        raise ObserverError("E_INPUT")
+
+
+# Grok CLI injects these into every hook process:
+# GROK_HOOK_EVENT, GROK_HOOK_NAME, GROK_SESSION_ID, GROK_WORKSPACE_ROOT.
+# Source: https://docs.x.ai/build/features/hooks (confirmed 2026-11-26).
+# Grok also loads ~/.claude/settings.json, so a Grok session would otherwise
+# record both --agent claude and --agent grok unless non-grok calls are ignored.
+GROK_RUNTIME_ENV = ("GROK_SESSION_ID", "GROK_HOOK_EVENT")
+HOOK_FIELD_ALIASES = {
+    "hookEventName": "hook_event_name",
+    "sessionId": "session_id",
+    "workspaceRoot": "cwd",
+    "turnId": "turn_id",
+    "promptId": "prompt_id",
+    "toolName": "tool_name",
+    "toolInput": "tool_input",
+    "toolResult": "tool_response",
+    "isSubagent": "is_subagent",
+    "agentId": "agent_id",
+}
+# hookEventName and GROK_HOOK_EVENT use Grok's snake_case values.
+GROK_HOOK_EVENTS = {
+    "user_prompt_submit": "UserPromptSubmit",
+    "post_tool_use": "PostToolUse",
+    "post_tool_use_failure": "PostToolUseFailure",
+    "stop": "Stop",
+    "stop_cancelled": "StopCancelled",
+    "interrupt": "Interrupt",
+}
+
+
+def grok_runtime():
+    return any(os.environ.get(name) for name in GROK_RUNTIME_ENV)
+
+
+def normalize_hook_payload(payload):
+    """Accept Grok/Claude camelCase event fields as well as snake_case. Mutates in place."""
+    if not isinstance(payload, dict):
+        return payload
+    for src, dst in HOOK_FIELD_ALIASES.items():
+        # Grok sends camelCase and snake_case together; values such as tool_input
+        # are dicts. A set membership test would raise TypeError (reported as E_INPUT).
+        if src in payload and (dst not in payload or payload.get(dst) in (None, "")):
+            payload[dst] = payload[src]
+    event = payload.get("hook_event_name")
+    if isinstance(event, str) and event in GROK_HOOK_EVENTS:
+        payload["hook_event_name"] = GROK_HOOK_EVENTS[event]
+    if payload.get("hook_event_name") in (None, ""):
+        env_event = os.environ.get("GROK_HOOK_EVENT")
+        if env_event in GROK_HOOK_EVENTS:
+            payload["hook_event_name"] = GROK_HOOK_EVENTS[env_event]
+    if payload.get("hook_event_name") == "StopCancelled":
+        payload["hook_event_name"] = "Interrupt"
+    return payload
+
+
+def hook_context(agent, payload):
+    """Validate and suppress before any state directory is created."""
+    if not isinstance(payload, dict):
+        raise ObserverError("E_INPUT")
+    normalize_hook_payload(payload)
+    if grok_runtime() and agent != "grok":
+        return None
+    cwd, session = payload.get("cwd"), payload.get("session_id")
+    if not isinstance(cwd, str) or not cwd or "\x00" in cwd:
+        raise ObserverError("E_INPUT")
+    if (os.environ.get("AGENT_EVOLUTION_EVALUATION") == "1"
+            or any(part.startswith(("agent-evolution-task-", "agent-evolution-reflect-")) for part in Path(cwd).parts)
+            or payload.get("agent_id") or payload.get("is_subagent")):
+        return None
+    valid_identity(agent, cwd, session)
+    if payload.get("hook_event_name") not in {"UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "Interrupt"}:
+        raise ObserverError("E_INPUT")
+    token = payload.get("turn_id") or payload.get("prompt_id")
+    if token is not None and (not isinstance(token, str) or len(token) > 1024):
+        raise ObserverError("E_INPUT")
+    return cwd, session
+
+
+@contextmanager
+def state_operation():
+    """Keep storage diagnostics fixed, without exposing paths or saved values."""
+    try:
+        yield
+    except StateError as error:
+        code = error.code if error.code in ERRORS else "E_IO"
+        raise ObserverError(code) from None
+
+
+def number(value):
+    return type(value) in {int, float} and math.isfinite(value)
+
+
+def validate_record(data, notice=False):
+    try:
+        good = (isinstance(data, dict) and re.fullmatch(r"[a-f0-9]{32}", data["id"])
+                and data["agent"] in AGENTS and isinstance(data["cwd"], str) and data["cwd"]
+                and re.fullmatch(r"[a-f0-9]{64}", data["session_hash"]) and number(data["created"])
+                and isinstance(data["failures"], dict) and isinstance(data["skills"], list)
+                and all(isinstance(x, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", x) for x in data["skills"])
+                and all(type(data[k]) is bool for k in ("closed", "suppressed", "offered", "assessment_requested")))
+        for failure in data["failures"].values():
+            good = good and isinstance(failure, dict) and type(failure["resolved"]) is bool
+        final = data["final"]
+        if final is not None:
+            good = (good and isinstance(final, dict) and final["status"] in STATUSES
+                    and isinstance(final["summary"], str) and number(final["recorded"]))
+        if notice:
+            good = (good and final is not None and final["status"] == "failed"
+                    and data["status"] in {"pending", "approved", "declined"} and number(data["expires"]))
+        if not good:
+            raise ObserverError("E_STATE_CORRUPT")
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise ObserverError("E_STATE_CORRUPT") from None
+    return data
 
 
 def clean(value, limit=500):
@@ -74,37 +238,83 @@ def skill_names(payload):
 
 
 class Observer:
-    def __init__(self, root):
-        self.root = Path(root).resolve()
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    def __init__(self, root, create=True):
+        # Explicit state paths are not resolved: resolving first would hide links.
+        if ".." in Path(root).parts:
+            raise ObserverError("E_UNSAFE_PATH")
+        self.root = Path(os.path.abspath(root))
+        self.storage = None
+        with state_operation():
+            try:
+                self.storage = PrivateState(self.root, create=create)
+            except FileNotFoundError:
+                if create:
+                    raise
+            if self.storage is not None and create:
+                self.storage.ensure_ignore()
 
     @contextmanager
     def locked(self):
         # Each native hook is a separate process; serialize short local updates.
-        with (self.root / "observer.lock").open("a") as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX)
-            try:
+        with state_operation():
+            if self.storage is None:
+                raise ObserverError("E_STATE_MISSING")
+            with self.storage.lock("observer.lock", blocking=True):
                 yield
-            finally:
-                fcntl.flock(stream, fcntl.LOCK_UN)
 
     def identity(self, agent, cwd, session):
-        if agent not in AGENTS or not isinstance(session, str) or not session or len(session) > 1024:
-            raise EvolutionError("Invalid observer identity")
+        valid_identity(agent, cwd, session)
         return digest(canonical([agent, str(Path(cwd).resolve()), session]))
 
     def path(self, identity):
+        if not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity):
+            raise ObserverError("E_STATE_CORRUPT")
         return self.root / "sessions" / (identity + ".json")
 
+    def read_json(self, path, notice=False):
+        if self.storage is None:
+            return None
+        with state_operation():
+            raw = self.storage.read_bytes(path.relative_to(self.root), missing_ok=True, max_bytes=MAX_BYTES)
+        if raw is None:
+            return None
+        try:
+            return validate_record(json.loads(raw), notice=notice)
+        except (ValueError, UnicodeError):
+            raise ObserverError("E_STATE_CORRUPT") from None
+
+    def write_json(self, path, data):
+        with state_operation():
+            if self.storage is None:
+                raise ObserverError("E_STATE_MISSING")
+            self.storage.write_bytes(path.relative_to(self.root), canonical(data))
+
     def read(self, identity):
-        p = self.path(identity)
-        return json.loads(p.read_text()) if p.exists() else None
+        state = self.read_json(self.path(identity))
+        if state and state["session_hash"] != identity:
+            raise ObserverError("E_STATE_CORRUPT")
+        return state
 
     def write(self, identity, data):
-        atomic_write(self.path(identity), canonical(data))
+        self.write_json(self.path(identity), data)
+
+    def notices(self, agent):
+        if self.storage is None:
+            return []
+        try:
+            with state_operation(), self.storage.directory("notices") as parent:
+                names = sorted(name for name in os.listdir(parent) if name.endswith(".json"))
+        except FileNotFoundError:
+            return []
+        results = []
+        for name in names:
+            notice = self.read_json(self.root / "notices" / name, notice=True)
+            if notice and notice["agent"] == agent:
+                results.append({k: notice[k] for k in ("id", "agent", "cwd", "status", "final", "expires")})
+        return results
 
     def command(self, agent, cwd, session):
-        return shlex.join([str(PROJECT / ".venv/bin/python"), str(PROJECT / "scripts/observe.py"),
+        return shlex.join([RUNTIME["python"], "-I", "-S", "-B", str(PROJECT / "scripts/observe.py"),
                            "--state", str(self.root), "--agent", agent, "--cwd", str(cwd), "--session", session])
 
     def guidance(self, agent, cwd, session):
@@ -126,16 +336,10 @@ class Observer:
                 "実モデル評価は対象・モデル・推論量・未消費の予算を確認してから。不足する条件だけ人に確認し、使い切った上限を再利用しません。")
 
     def hook(self, agent, payload):
-        if not isinstance(payload, dict):
-            raise EvolutionError("Expected hook object")
-        cwd, session = payload.get("cwd"), payload.get("session_id")
-        if not isinstance(cwd, str) or not cwd:
-            raise EvolutionError("Missing working directory")
-        if os.environ.get("AGENT_EVOLUTION_EVALUATION") == "1" or any(
-                part.startswith(("agent-evolution-task-", "agent-evolution-reflect-")) for part in Path(cwd).parts):
+        context = hook_context(agent, payload)
+        if context is None:
             return {}
-        if payload.get("agent_id") or payload.get("is_subagent"):
-            return {}
+        cwd, session = context
         identity = self.identity(agent, cwd, session)
         event = payload.get("hook_event_name")
         with self.locked():
@@ -171,7 +375,8 @@ class Observer:
                 inputs = payload.get("tool_input", {})
                 raw = canonical(inputs)
                 # Observation commands must not invalidate their own final status.
-                if "scripts/observe.py" in raw or "agent-evolution-observer" in raw:
+                if ("scripts/observe.py" in raw or "agent-evolution-observer" in raw
+                        or payload.get("tool_name") == "agent_evolution_outcome"):
                     return {}
                 status, code = result_status(payload)
                 if status == "unknown" and agent == "claude" and event == "PostToolUse":
@@ -206,7 +411,7 @@ class Observer:
                 return {}
             notice = {**state, "status": "pending", "expires": time.time() + TTL,
                       "consent_scope": "investigation-and-dataset-preparation-only"}
-            atomic_write(self.notice_path(state["id"]), canonical(notice))
+            self.write_json(self.notice_path(state["id"]), notice)
             state["offered"] = state["closed"] = True
             self.write(identity, state)
             command = self.command(agent, cwd, session)
@@ -227,14 +432,18 @@ class Observer:
 
     def outcome(self, agent, cwd, session, status, summary, skill=None):
         if status not in STATUSES or not summary.strip():
-            raise EvolutionError("A final status and summary are required")
+            raise ObserverError("E_INPUT")
         if skill and (not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", skill) or redact(skill) != skill):
-            raise EvolutionError("Invalid skill name")
+            raise ObserverError("E_INPUT")
         identity = self.identity(agent, cwd, session)
         with self.locked():
             state = self.read(identity)
-            if not state or state["closed"] or state["suppressed"] or time.time() - state["created"] > TTL:
-                raise EvolutionError("No active observation for this task")
+            if not state:
+                raise ObserverError("E_STATE_MISSING")
+            if state["closed"] or state["suppressed"]:
+                raise ObserverError("E_TASK_CLOSED")
+            if time.time() - state["created"] > TTL:
+                raise ObserverError("E_TASK_EXPIRED")
             state["final"] = {"status": status, "summary": clean(summary), "recorded": time.time()}
             if skill:
                 state["skills"] = sorted(set(state["skills"]) | {skill})
@@ -243,21 +452,29 @@ class Observer:
 
     def notice_path(self, ident):
         if not re.fullmatch(r"[a-f0-9]{32}", ident):
-            raise EvolutionError("Invalid notice ID")
+            raise ObserverError("E_INPUT")
         return self.root / "notices" / (ident + ".json")
 
-    def decide(self, ident, decision):
+    def decide(self, ident, decision, agent=None, cwd=None, session=None):
         if decision not in {"approve", "decline"}:
-            raise EvolutionError("Expected approve or decline")
+            raise ObserverError("E_INPUT")
         with self.locked():
             path = self.notice_path(ident)
-            if not path.exists():
-                raise EvolutionError("Unknown notice")
-            notice = json.loads(path.read_text())
-            if notice["status"] != "pending" or time.time() >= notice["expires"]:
-                raise EvolutionError("Notice already decided or expired")
+            notice = self.read_json(path, notice=True)
+            if not notice:
+                raise ObserverError("E_STATE_MISSING")
+            if notice["id"] != ident:
+                raise ObserverError("E_STATE_CORRUPT")
+            if agent is not None and notice["agent"] != agent:
+                raise ObserverError("E_INPUT")
+            if session and notice["session_hash"] != self.identity(agent, cwd, session):
+                raise ObserverError("E_INPUT")
+            if notice["status"] != "pending":
+                raise ObserverError("E_NOTICE_DECIDED")
+            if time.time() >= notice["expires"]:
+                raise ObserverError("E_NOTICE_EXPIRED")
             notice.update(status="approved" if decision == "approve" else "declined", decided=time.time())
-            atomic_write(path, canonical(notice))
+            self.write_json(path, notice)
             if decision == "approve":
                 current = self.read(notice["session_hash"])
                 if current:
@@ -271,16 +488,32 @@ class Observer:
         return result
 
 
+def diagnostic(error):
+    if isinstance(error, ObserverError):
+        return error.code
+    if isinstance(error, PermissionError) or isinstance(error, OSError) and error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}:
+        return "E_PERMISSION"
+    if isinstance(error, OSError) and error.errno in {errno.ELOOP, errno.ENOTDIR, errno.EISDIR}:
+        return "E_UNSAFE_PATH"
+    return "E_IO" if isinstance(error, OSError) else "E_INPUT"
+
+
+class SafeParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ObserverError("E_INPUT")
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--state", type=Path, default=PROJECT / ".evolution-observer")
+    parser = SafeParser(description=__doc__)
+    parser.add_argument("--state", type=Path)
     parser.add_argument("--agent", choices=AGENTS, required=True)
     parser.add_argument("--cwd", default=os.getcwd())
     parser.add_argument("--session", default="")
     sub = parser.add_subparsers(dest="mode", required=True)
     sub.add_parser("hook")
     sub.add_parser("event")
-    sub.add_parser("list")
+    p = sub.add_parser("list")
+    p.add_argument("--cwd", default=argparse.SUPPRESS)
     p = sub.add_parser("outcome")
     p.add_argument("--status", choices=STATUSES, required=True)
     p.add_argument("--summary", required=True)
@@ -288,30 +521,49 @@ def main(argv=None):
     p = sub.add_parser("decide")
     p.add_argument("--notice", required=True)
     p.add_argument("--decision", choices=("approve", "decline"), required=True)
-    args = parser.parse_args(argv)
+    args = None
     try:
-        observer = Observer(args.state)
+        args = parser.parse_args(argv)
+        payload = None
         if args.mode in {"hook", "event"}:
-            raw = sys.stdin.read(1_000_001)
-            if len(raw) > 1_000_000:
-                raise EvolutionError("Hook payload too large")
-            result = observer.hook(args.agent, json.loads(raw))
-            # Only contract fields go to native hooks. JS integrations use the same reason.
+            raw = sys.stdin.read(MAX_BYTES + 1)
+            if len(raw) > MAX_BYTES:
+                raise ObserverError("E_INPUT_TOO_LARGE")
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                raise ObserverError("E_INPUT") from None
+            context = hook_context(args.agent, payload)
+            if context is None:
+                print("{}")
+                return 0
+            cwd = context[0]
+        else:
+            cwd = args.cwd
+        if not isinstance(cwd, str) or not cwd or "\x00" in cwd:
+            raise ObserverError("E_INPUT")
+        root = args.state if args.state is not None else Path(cwd) / ".evolution-observer"
+        observer = Observer(root, create=args.mode != "list")
+        if args.mode in {"hook", "event"}:
+            result = observer.hook(args.agent, payload)
             if args.mode == "hook":
                 result = {k: v for k, v in result.items() if k not in {"notice", "question"}}
         elif args.mode == "outcome":
             result = observer.outcome(args.agent, args.cwd, args.session, args.status, args.summary, args.skill)
         elif args.mode == "decide":
-            result = observer.decide(args.notice, args.decision)
+            result = observer.decide(args.notice, args.decision, args.agent, args.cwd, args.session)
         else:
-            result = [{k: n[k] for k in ("id", "agent", "cwd", "status", "final", "expires")}
-                      for p in sorted((observer.root / "notices").glob("*.json"))
-                      if (n := json.loads(p.read_text()))["agent"] == args.agent]
+            result = observer.notices(args.agent)
         print(json.dumps(result, ensure_ascii=False))
         return 0
-    except (OSError, ValueError, TypeError, EvolutionError):
-        if args.mode in {"hook", "event"}:
-            print(json.dumps({"systemMessage": "agent-evolution: 終了監視の記録に失敗しました。自動起動は行っていません。"}, ensure_ascii=False))
+    except (OSError, ValueError, TypeError, EvolutionError) as error:
+        code = diagnostic(error)
+        message = f"agent-evolution: [{code}] 終了監視: {ERRORS[code]} 自動起動は行っていません。"
+        if args is not None and args.mode in {"hook", "event"}:
+            result = {"systemMessage": message}
+            if args.mode == "event":
+                result["error"] = {"code": code, "operation": args.mode}
+            print(json.dumps(result, ensure_ascii=False))
             return 0
-        print("agent-evolution: observer operation failed; no model was called", file=sys.stderr)
+        print(message + " no model was called", file=sys.stderr)
         return 2

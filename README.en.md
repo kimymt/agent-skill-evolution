@@ -2,17 +2,21 @@
 
 [日本語](README.md)
 
-A local CLI for comparing the body of a shared agent skill's `SKILL.md` using fixed tasks, models, and reasoning settings. It records candidate revisions and evaluation results, supports comparisons of manually written candidates, and generates candidates with [GEPA](https://github.com/gepa-ai/gepa).
+A local CLI for comparing the body of a shared agent skill's `SKILL.md` using fixed tasks, models, and reasoning settings. It records candidate revisions and evaluation results, supports comparisons of manually written candidates, and generates candidates with [GEPA](https://github.com/gepa-ai/gepa). Evaluation adapters are provided for Claude Code, Codex, OpenCode, and Pi; you can start with a single product. The optional [completion observer](OBSERVER.md) also supports Grok CLI.
 
 Only the skill body is eligible for evolution. Frontmatter, supporting files, and the agent's own code are outside its scope. Applying a candidate requires a review of the evaluation results and human approval.
 
 ## Release status
 
-This distribution is based on a snapshot saved before changes on October 10, 2026, at 21:27. It does not include subsequent compatibility improvements or security fixes.
+This tree includes changes made after the initial public snapshot (`c0b17a4a`, 2026-10-11). The earlier README statement that this distribution was a pre-change snapshot and did not include later compatibility or security fixes no longer applies.
 
-The code includes CLI integrations and event adapters for Codex, Claude Code, OpenCode, and Pi. Previous live model connection checks covered only Codex on macOS. Live connections for the other products and Docker remain unverified. The Codex native configuration requires version `0.160.0`; compatibility with the latest CLI is not guaranteed.
+The following statements are limited to what has been verified:
 
-The code permits settings controlled by the evaluation workspace to affect secret scanning. Its skill-read detection can accept a read from another path as a read of the specified skill, and its process cleanup can miss child processes that move into a separate session. The observer installer identifies managed hooks by a path string in the command, which can cause it to remove unrelated hooks. Parsing deeply nested JSON can also raise exceptions that are not recorded as ordinary evaluation failures. These issues remain unresolved in this distribution.
+- Offline unit tests (pytest and JavaScript) and `doctor` (which does not call a model) can be run from the repository root.
+- `doctor` lists whether each agent CLI is installed. A product that is not on `PATH` is reported as `not_on_path`. Authentication and the shape of live model responses are not verified by this offline check.
+- The Docker evaluation path does not start a live evaluation, because reading per-product effective settings is unimplemented and the `settings` check is a required `unverified` result.
+- Live model responses under the current evidence rules, and Docker evaluations, have not been verified.
+- Codex native does not use an allowlist of specific CLI versions. Omit the version or set it to `"auto"` to read it from the environment; an explicit value must match exactly.
 
 ## Setup
 
@@ -63,7 +67,7 @@ The example limits evaluation to four tasks for comparing the current and candid
 .venv/bin/agent-evolution evolve --run RUN_ID
 ```
 
-The configuration requires a `generator` profile and a `budget.max_generations` value greater than zero. Evaluation and generation can use different models. Candidates are generated from train tasks and results, then selected using validation. Holdout is not supplied during the search. Previous verification records for this snapshot do not confirm live model connections for GEPA candidate generation.
+The configuration requires a `generator` profile and a `budget.max_generations` value greater than zero. Evaluation and generation can use different models. Candidates are generated from train tasks and results, then selected using validation. Holdout is not supplied during the search. Live model connections for GEPA candidate generation have not been confirmed in the records kept with this tree.
 
 ## Final comparison and application
 

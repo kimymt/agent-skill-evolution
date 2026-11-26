@@ -110,9 +110,14 @@ def test_process_cancellation(tmp_path):
     assert result.status == "cancelled"
 
 
-def test_unknown_native_version_refused():
+def test_native_version_is_observed_or_explicit_not_allowlisted():
+    for version in (None, "auto", "9.0.0"):
+        assert Profile(id="future", agent="codex", model="m", effort="high", version=version,
+                       backend="codex-native").version == version
     with pytest.raises(ValidationError):
-        Profile(id="bad", agent="codex", model="m", effort="high", version="9.0.0", backend="codex-native")
+        Profile(id="bad", agent="pi", model="m", effort="high", backend="codex-native")
+    with pytest.raises(ValidationError):
+        Profile(id="bad", agent="unknown", model="m", effort="high", backend="simulation")
 
 
 @pytest.mark.parametrize("image", ["latest", "image@sha256:short", "image@sha256:" + "z" * 64])

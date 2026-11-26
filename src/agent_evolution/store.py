@@ -7,23 +7,39 @@ import uuid
 import re
 from pathlib import Path
 
+from .state import PrivateState
 from .util import canonical, EvolutionError
+
+DATABASE_FILES = ("state.sqlite", "state.sqlite-wal", "state.sqlite-shm", "state.sqlite-journal")
 
 
 class Store:
     def __init__(self, root: Path):
-        self.root = root.resolve()
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.files = PrivateState(root)
+        self.root = self.files.root
+        self.files.ensure_ignore()
+        for name in DATABASE_FILES:
+            self.files.file_info(name, missing_ok=True)
+        self.files.ensure_file("state.sqlite")
+        # sqlite3 has no dir_fd/SQLITE_OPEN_NOFOLLOW interface. Keep the existing
+        # Python driver inside the validated private tree; this is not isolation
+        # from a hostile process running under the same OS account.
         self.db = sqlite3.connect(self.root / "state.sqlite", timeout=5)
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.executescript("""
-        CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, data TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, run TEXT, kind TEXT, at REAL, data TEXT);
-        CREATE TABLE IF NOT EXISTS usage(run TEXT, kind TEXT, count INTEGER, PRIMARY KEY(run,kind));
-        CREATE TABLE IF NOT EXISTS evals(run TEXT, key TEXT, data TEXT, PRIMARY KEY(run,key));
-        CREATE TABLE IF NOT EXISTS holdouts(key TEXT PRIMARY KEY, run TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS promotions(id TEXT PRIMARY KEY, data TEXT NOT NULL);
-        """)
+        try:
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, run TEXT, kind TEXT, at REAL, data TEXT);
+            CREATE TABLE IF NOT EXISTS usage(run TEXT, kind TEXT, count INTEGER, PRIMARY KEY(run,kind));
+            CREATE TABLE IF NOT EXISTS evals(run TEXT, key TEXT, data TEXT, PRIMARY KEY(run,key));
+            CREATE TABLE IF NOT EXISTS holdouts(key TEXT PRIMARY KEY, run TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS promotions(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            """)
+            for name in DATABASE_FILES:
+                self.files.file_info(name, missing_ok=True)
+        except BaseException:
+            self.db.close()
+            raise
 
     def create(self, data: dict) -> str:
         ident = uuid.uuid4().hex

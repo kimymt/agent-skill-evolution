@@ -10,10 +10,11 @@ import typer
 
 from . import __version__
 from .adapters import probe
-from .models import Suite, Experiment, load
-from .runner import Runner, create_run
+from .models import AGENTS, Suite, Experiment, load
+from .runner import Runner, create_run, read_input_text
+from .state import PrivateState, resolve_input_path
 from .store import Store
-from .util import EvolutionError, canonical, atomic_write, lock
+from .util import EvolutionError, canonical, atomic_write
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 dataset_app = typer.Typer(no_args_is_help=True)
@@ -31,30 +32,76 @@ def store():
     return Store(state_root)
 
 
+def _private_path(path: Path, *, create=False):
+    root = state_root.absolute()
+    try:
+        files = PrivateState(root, create=False)
+    except FileNotFoundError:
+        files = None
+    path = resolve_input_path(root, path)
+    if path.is_relative_to(root):
+        if files is None:
+            files = PrivateState(root, create=create)
+        return files, path.relative_to(root).as_posix()
+    return None
+
+
+def _load_input(model, path: Path):
+    location = _private_path(path)
+    if location is None:
+        return load(model, path)
+    files, relative = location
+    try:
+        return model.model_validate_json(files.read_bytes(relative))
+    except (ValueError, OSError) as error:
+        raise EvolutionError(f"Invalid {model.__name__} file: {path.name} ({type(error).__name__})") from None
+
+
 def show(value):
     typer.echo(json.dumps(value, ensure_ascii=False, indent=2))
 
 
 @app.command()
-def doctor(agents: str = "claude,codex,opencode,pi"):
+def doctor(agents: str = "claude,codex,opencode,pi", config: Optional[Path] = typer.Option(None)):
+    if config is not None:
+        from .environment import inspect_profile, inspect_state_path
+        selected = _load_input(Experiment, config)
+        profiles = [*selected.targets, *([selected.generator] if selected.generator else [])]
+        reports = [inspect_profile(profile) for profile in profiles]
+        storage = inspect_state_path(state_root)
+        ready = all(report["ready"] for report in reports) and storage["status"] == "passed"
+        show({"version": __version__, "profiles": reports, "state": storage,
+              "ready": ready, "model_called": False, "run_created": False})
+        if not ready:
+            raise typer.Exit(2)
+        return
     names = agents.split(",")
-    if any(a not in {"claude", "codex", "opencode", "pi"} for a in names):
+    if any(a not in AGENTS for a in names):
         raise EvolutionError("Unknown agent name")
     show({"version": __version__, "agents": [probe(a) for a in names],
           "docker": bool(shutil.which("docker")), "gitleaks": bool(shutil.which("gitleaks")),
-          "model_called": False})
+          "model_called": False, "ready": None, "scope": "inventory_only; use doctor --config for evaluation checks"})
 
 
 @dataset_app.command("validate")
 def validate(suite: Path = typer.Option(...)):
-    data = load(Suite, suite)
+    data = _load_input(Suite, suite)
     show({"valid": True, "reviewed": data.reviewed, "cases": len(data.cases),
           "splits": {s: sum(c.split == s for c in data.cases) for s in ("train", "validation", "holdout")}})
 
 
 @app.command()
 def schema(output: Path = typer.Option(...)):
-    atomic_write(output, json.dumps(Experiment.model_json_schema(), indent=2))
+    content = json.dumps(Experiment.model_json_schema(), indent=2)
+    location = _private_path(output, create=True)
+    if location is None:
+        atomic_write(output, content)
+    else:
+        files, relative = location
+        files.ensure_ignore()
+        if relative == ".gitignore":
+            raise EvolutionError("Schema output cannot replace the state exclusion file")
+        files.write_bytes(relative, content)
     show({"schema": str(output)})
 
 
@@ -69,7 +116,7 @@ def start(config: Path = typer.Option(...)):
 def baseline(run: str = typer.Option(...), split: str = "train"):
     s = store()
     s.get(run)
-    with lock(s.root / (run + ".lock")):
+    with s.files.lock(run + ".lock"):
         r = Runner(s, run)
         show(r.evaluate_split(r.data["baseline"], split))
 
@@ -78,16 +125,16 @@ def baseline(run: str = typer.Option(...), split: str = "train"):
 def import_candidate(run: str = typer.Option(...), body: Path = typer.Option(...)):
     s = store()
     s.get(run)
-    with lock(s.root / (run + ".lock")):
+    with s.files.lock(run + ".lock"):
         r = Runner(s, run)
-        show({"candidate": r.add_candidate(body.read_text())})
+        show({"candidate": r.add_candidate(read_input_text(s, body))})
 
 
 @app.command()
 def evaluate(run: str = typer.Option(...), candidate_sha: str = typer.Option(...), split: str = "validation"):
     s = store()
     s.get(run)
-    with lock(s.root / (run + ".lock")):
+    with s.files.lock(run + ".lock"):
         r = Runner(s, run)
         if candidate_sha not in r.data["artifacts"]:
             raise EvolutionError("Unknown candidate hash")
@@ -98,7 +145,7 @@ def evaluate(run: str = typer.Option(...), candidate_sha: str = typer.Option(...
 def select(run: str = typer.Option(...), candidate_sha: str = typer.Option(...)):
     s = store()
     s.get(run)
-    with lock(s.root / (run + ".lock")):
+    with s.files.lock(run + ".lock"):
         Runner(s, run).select(candidate_sha)
         show({"selected": candidate_sha})
 
@@ -108,7 +155,7 @@ def evolve(run: str = typer.Option(...)):
     from .optimizer import evolve as optimize
     s = store()
     s.get(run)
-    with lock(s.root / (run + ".lock")):
+    with s.files.lock(run + ".lock"):
         r = Runner(s, run)
         if r.config.generator is None:
             raise EvolutionError("Configure a generator profile before invoking GEPA")
@@ -119,7 +166,7 @@ def evolve(run: str = typer.Option(...)):
 def finalize(run: str = typer.Option(...)):
     s = store()
     s.get(run)
-    with lock(s.root / (run + ".lock")):
+    with s.files.lock(run + ".lock"):
         show(Runner(s, run).finalize())
 
 
@@ -135,7 +182,7 @@ def approve(run: str = typer.Option(...), candidate_sha: str = typer.Option(...)
     from .promotion import approve as record
     s = store()
     s.get(run)
-    with lock(s.root / (run + ".lock")):
+    with s.files.lock(run + ".lock"):
         record(s, run, candidate_sha, report_sha)
         show({"approved": candidate_sha})
 
@@ -145,7 +192,7 @@ def promote(run: str = typer.Option(...), candidate_sha: str = typer.Option(...)
     from .promotion import promote as apply
     s = store()
     s.get(run)
-    with lock(s.root / (run + ".lock")):
+    with s.files.lock(run + ".lock"):
         show({"promotion": apply(s, run, candidate_sha, report_sha)})
 
 
@@ -153,7 +200,7 @@ def promote(run: str = typer.Option(...), candidate_sha: str = typer.Option(...)
 def rollback(promotion: str = typer.Option(...)):
     from .promotion import rollback as undo
     s = store()
-    with lock(s.root / "rollback.lock"):
+    with s.files.lock("rollback.lock"):
         undo(s, promotion)
     show({"rolled_back": promotion})
 
@@ -162,7 +209,7 @@ def rollback(promotion: str = typer.Option(...)):
 def cancel(run: str = typer.Option(...)):
     s = store()
     s.get(run)
-    atomic_write(s.root / "runs" / run / "cancel", "cancelled\n")
+    s.files.write_bytes(f"runs/{run}/cancel", "cancelled\n")
     show({"cancel_requested": run})
 
 
