@@ -7,6 +7,12 @@ description: Evaluate and improve a shared SKILL.md using fixed tasks, selected 
 
 共通CLIの導入と操作は、配布リポジトリの `README.md` を読む。同梱の `scripts/run.py` は、このリポジトリの `skills/agent-evolution/` から、リポジトリルートの `.venv/bin/agent-evolution` を起動する。従来どおり、CLIフォルダの隣に `agent-skills/agent-evolution/` がある配置でも動作する。
 
+## 実行手順
+
+通常の実行順は `start` → `baseline` → `evolve` → `evaluate` → `select` → `finalize` → `report` → `approve` → `promote`。設定ファイルのひな形、各サブコマンドの引数、人が承認する地点、`cancel` の使い方は [実行手順](references/procedure.md) を読む。
+
+`start` の前に `doctor --config PATH` と `dataset validate --suite PATH` で前提を確認できる。手で書いた本文を評価する場合は `evolve` の代わりに `import-candidate` を使う。
+
 ## 作業終了時の起動確認
 
 終了監視から呼ばれた場合は、[承認後の開始手順](references/completion-observer.md)を読む。終了時に失敗が残った作業だけ起動を提案し、人の明示的な承認を待つ。途中のエラーが解消した作業、未確認だけの作業、中断した作業は起動対象にしない。Claude Code、Codex、Grok CLI では会話内で確認する。製品ごとの登録先と信頼手順は参照文書に記載する。
