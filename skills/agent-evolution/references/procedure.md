@@ -14,8 +14,8 @@
 - `start` と `doctor` はモデルを呼ばない。終了監視の起動承認や、対象整理の承認だけで、実モデル評価や正本への適用まで許可されたとは扱わない。
 - `baseline`、`evolve`、`evaluate`、`finalize` は実モデルを呼び得る。既存の利用許可と予算を引き継ぎ、未指定ならモデル呼び出し前に人が確定する。
 - `select` では、人が評価結果を確認した候補ハッシュだけを指定する。
-- 採用は `finalize` で適格と判定された候補だけが対象。人が `report` の差分・課題別結果・未選択製品・費用不明の項目と適用先を確認し、採用を指示した場合にだけ `approve` と `promote` を実行する。改善案の生成依頼だけでは正本を置き換えない。
-- `rollback` も人の指示が必要。正本が後から編集されていれば上書きしない。
+- 採用は `finalize` で適格と判定された候補だけが対象。承認は人が行う。人が `report` の差分・課題別結果・未選択製品・費用不明の項目と、候補ハッシュ・評価レポート・適用先を確認し、採用を指示した場合にだけ `approve` と `promote` を実行する。`approve`、`promote`、`rollback` は対話端末では実行内容（run、候補、レポート、反映先、rollback では採用ID）を表示して y/N で確認する。対話端末でなければ、人が明示した `--yes` がないと非0で終了する。エージェントは `--yes` を自分で付けてはいけない。改善案の生成依頼だけでは正本を置き換えない。対象スキルを使う作業を終えてから採用し、新しいセッションを開始する。
+- `rollback` も人の指示が必要で、`approve` や `promote` と同じ確認手順を取る。正本が後から編集されていれば上書きしない。エージェントは `--yes` を自分で付けてはいけない。
 - `cancel` は人の判断で実行する。
 
 ## 設定ファイルのひな形
@@ -123,22 +123,25 @@ agent-evolution finalize --run RUN_ID
 agent-evolution report --run RUN_ID
 ```
 
-8. `approve` — 適格な候補とレポートを、人が確認した記録として残す。候補は `select` と `finalize` で固定したものと一致し、レポートハッシュも一致している必要がある。正本はまだ変更しない。
+8. `approve` — 適格な候補とレポートを、人が確認した記録として残す。候補は `select` と `finalize` で固定したものと一致し、レポートハッシュも一致している必要がある。正本はまだ変更しない。承認は候補ハッシュ・評価レポート・適用先に結び付く。対話端末では内容確認のあと y/N で進める。非対話では人が付けた `--yes` が必要。エージェントは `--yes` を自分で付けてはいけない。
 
 ```sh
 agent-evolution approve --run RUN_ID --candidate-sha SHA --report-sha REPORT_SHA
+agent-evolution approve --run RUN_ID --candidate-sha SHA --report-sha REPORT_SHA --yes
 ```
 
-9. `promote` — 承認済みの同じ候補・レポート・適用先に対して、正本の `SKILL.md` を置き換える。正本が評価後に編集されていれば拒否する。名前、説明、補助ファイルは変更できない。
+9. `promote` — 承認済みの同じ候補・レポート・適用先に対して、正本の `SKILL.md` を置き換える。正本が評価後に編集されていれば拒否する。名前、説明、補助ファイルは変更できない。`approve` と同じ確認手順を取る。エージェントは `--yes` を自分で付けてはいけない。
 
 ```sh
 agent-evolution promote --run RUN_ID --candidate-sha SHA --report-sha REPORT_SHA
+agent-evolution promote --run RUN_ID --candidate-sha SHA --report-sha REPORT_SHA --yes
 ```
 
-必要なら、返された採用IDを指定して戻す。
+必要なら、返された採用IDを指定して戻す。`approve` や `promote` と同じ確認手順を取る。エージェントは `--yes` を自分で付けてはいけない。
 
 ```sh
 agent-evolution rollback --promotion PROMOTION_ID
+agent-evolution rollback --promotion PROMOTION_ID --yes
 ```
 
 ## cancel の使い方

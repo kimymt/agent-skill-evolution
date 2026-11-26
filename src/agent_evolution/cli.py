@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import signal
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -59,6 +60,32 @@ def _load_input(model, path: Path):
 
 def show(value):
     typer.echo(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+
+def _is_interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _confirm_adoption(*, action: str, run: str, candidate_sha: str, report_sha: str, target: str, yes: bool,
+                      promotion: str | None = None):
+    typer.echo(f"action: {action}")
+    if promotion is not None:
+        typer.echo(f"promotion: {promotion}")
+    typer.echo(f"run: {run}")
+    typer.echo(f"candidate: {candidate_sha}")
+    typer.echo(f"report: {report_sha}")
+    typer.echo(f"target: {target}")
+    if yes:
+        return
+    if not _is_interactive():
+        typer.echo("Non-interactive confirmation requires --yes", err=True)
+        raise typer.Exit(1)
+    typer.echo("Continue? [y/N] ", nl=False)
+    answer = sys.stdin.readline()
+    if answer.strip().lower() not in {"y", "yes"}:
+        typer.echo("Confirmation declined", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -178,28 +205,42 @@ def report(run: str = typer.Option(...)):
 
 
 @app.command()
-def approve(run: str = typer.Option(...), candidate_sha: str = typer.Option(...), report_sha: str = typer.Option(...)):
+def approve(run: str = typer.Option(...), candidate_sha: str = typer.Option(...), report_sha: str = typer.Option(...),
+            yes: bool = typer.Option(False, "--yes", help="Confirm without a prompt")):
     from .promotion import approve as record
     s = store()
-    s.get(run)
+    data = s.get(run)
+    _confirm_adoption(action="approve", run=run, candidate_sha=candidate_sha, report_sha=report_sha,
+                      target=str(data["config"]["skill"]), yes=yes)
     with s.files.lock(run + ".lock"):
         record(s, run, candidate_sha, report_sha)
         show({"approved": candidate_sha})
 
 
 @app.command()
-def promote(run: str = typer.Option(...), candidate_sha: str = typer.Option(...), report_sha: str = typer.Option(...)):
+def promote(run: str = typer.Option(...), candidate_sha: str = typer.Option(...), report_sha: str = typer.Option(...),
+            yes: bool = typer.Option(False, "--yes", help="Confirm without a prompt")):
     from .promotion import promote as apply
     s = store()
-    s.get(run)
+    data = s.get(run)
+    _confirm_adoption(action="promote", run=run, candidate_sha=candidate_sha, report_sha=report_sha,
+                      target=str(data["config"]["skill"]), yes=yes)
     with s.files.lock(run + ".lock"):
         show({"promotion": apply(s, run, candidate_sha, report_sha)})
 
 
 @app.command()
-def rollback(promotion: str = typer.Option(...)):
+def rollback(promotion: str = typer.Option(...),
+             yes: bool = typer.Option(False, "--yes", help="Confirm without a prompt")):
     from .promotion import rollback as undo
     s = store()
+    row = s.db.execute("SELECT data FROM promotions WHERE id=?", (promotion,)).fetchone()
+    if not row:
+        raise EvolutionError("Unknown promotion ID")
+    entry = json.loads(row[0])
+    _confirm_adoption(action="rollback", run=str(entry["run"]), candidate_sha=str(entry["after"]["hash"]),
+                      report_sha=str(entry["report"]), target=str(entry["target"]), yes=yes,
+                      promotion=promotion)
     with s.files.lock("rollback.lock"):
         undo(s, promotion)
     show({"rolled_back": promotion})
